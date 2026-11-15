@@ -20,6 +20,8 @@ const MAP_MAX_ZOOM = 4;
 const PAN_MARGIN_FRACTION = 0.25;
 // docs/assumptions.md, "Units": the uint8 science value scale (docs/data-contract.md, section 1).
 const SCIENCE_VALUE_MAX = 255;
+// docs/assumptions.md, "Units".
+const SECONDS_PER_MINUTE = 60;
 
 // A 1 x 1 transparent GIF, shown while there is no envelope.
 const EMPTY_IMAGE = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
@@ -36,7 +38,12 @@ type MapView = {
   routeGlow: L.Polyline;
   routeCore: L.Polyline;
   returnPath: L.Polyline;
+  rescuePath: L.Polyline;
+  shelterPath: L.Polyline;
+  alertMarkers: L.LayerGroup;
+  alertBanner: HTMLElement;
   planMarkers: L.LayerGroup;
+  peakMarkers: L.LayerGroup;
   // Astronaut id -> marker, placed from the simulate reply.
   crewMarkers: Record<"A" | "B", L.Marker>;
 };
@@ -113,16 +120,45 @@ function buildMap(container: HTMLElement, meta: SiteMeta, siteUrl: string): MapV
   const routeGlow = L.polyline([], { className: "route-glow", weight: 12, interactive: false });
   const routeCore = L.polyline([], { className: "route-core", weight: 3, interactive: false });
   const returnPath = L.polyline([], { className: "return-path", weight: 2, dashArray: "6 6", interactive: false });
-  layers.route = L.layerGroup([routeGlow, routeCore, returnPath]);
+  // Buddy injured: the rescuer's walk and carry, dotted so it reads apart from the dashed way home.
+  const rescuePath = L.polyline([], { className: "rescue-path", weight: 4, dashArray: "1 8", lineCap: "round", interactive: false });
+  // Solar particle alert: the way to the chosen full shelter, wide and solid so it is the first thing seen.
+  const shelterPath = L.polyline([], { className: "shelter-path", weight: 6, interactive: false });
+  layers.route = L.layerGroup([routeGlow, routeCore, returnPath, rescuePath, shelterPath]);
+  // The terrain partial shelter of a solar particle alert (simulate shelters, kind "partial").
+  const alertMarkers = L.layerGroup().addTo(map);
+
+  // Solar particle alert banner over the top of the map. Text from the engine reply (render).
+  const alertBanner = document.createElement("div");
+  alertBanner.className = "alert-banner";
+  alertBanner.setAttribute("role", "alert");
+  alertBanner.hidden = true;
+  container.parentElement?.append(alertBanner);
 
   const siteMarkers = buildSiteMarkers(meta);
   const planMarkers = L.layerGroup();
+  // Science peaks from the last science plan (SciencePlan.candidates, kind "peak"). Not in meta.json.
+  const peakMarkers = L.layerGroup();
   // B below A, so A stays readable when both stand on the same cell.
+  // B can be dragged: it then stands on that cell instead of on the timeline (simulate bPosition).
+  const crewB = L.marker([0, 0], { icon: divIcon("marker-crew marker-crew-b", "B", 22), draggable: true, keyboard: false, zIndexOffset: 850 });
+  tooltip(crewB, "Crewmember B<br>Drag to place B anywhere");
+  crewB.on("dragend", () => {
+    const latlng = crewB.getLatLng();
+    const cell = latLngToCell(meta, latlng.lat, latlng.lng);
+    if (cell) {
+      update({ bPosition: cell });
+      return;
+    }
+    // Dropped outside the grid: put it back where the engine last placed B.
+    const placed = getState().sim?.astronauts.find((item) => item.id === "B");
+    if (placed) crewB.setLatLng(cellToLatLng(meta, placed.cell));
+  });
   const crewMarkers = {
     A: L.marker([0, 0], { icon: divIcon("marker-crew", "A", 22), interactive: false, zIndexOffset: 900 }),
-    B: L.marker([0, 0], { icon: divIcon("marker-crew marker-crew-b", "B", 22), interactive: false, zIndexOffset: 850 }),
+    B: crewB,
   };
-  layers.markers = L.layerGroup([siteMarkers, planMarkers]);
+  layers.markers = L.layerGroup([siteMarkers, peakMarkers, planMarkers]);
 
   map.on("click", (event: L.LeafletMouseEvent) => onMapClick(meta, event.latlng));
   map.on("contextmenu", (event: L.LeafletMouseEvent) => L.DomEvent.preventDefault(event.originalEvent));
@@ -138,7 +174,12 @@ function buildMap(container: HTMLElement, meta: SiteMeta, siteUrl: string): MapV
     routeGlow,
     routeCore,
     returnPath,
+    rescuePath,
+    shelterPath,
+    alertMarkers,
+    alertBanner,
     planMarkers,
+    peakMarkers,
     crewMarkers,
   };
 }
@@ -230,8 +271,10 @@ function render(view: MapView, state: MissionState, previous: MissionState | nul
   if (changed("envelope") || changed("contingency")) drawEnvelope(view, state.contingency ? state.contingency.envelope : state.envelope);
   if (changed("route")) drawRoute(view, state);
   if (changed("sim") || changed("contingency")) drawReturnPath(view, state);
+  if (changed("contingency") || changed("scenario")) drawSepAlert(view, state);
   if (changed("stops") || changed("start") || changed("end") || changed("selectedStop")) drawPlanMarkers(view, state);
-  if (changed("sim") || changed("layers")) drawCrew(view, state);
+  if (changed("sciencePlan")) drawPeakMarkers(view, state);
+  if (changed("sim") || changed("contingency") || changed("layers")) drawCrew(view, state);
   if (changed("placing")) view.map.getContainer().dataset.placing = state.placing;
 }
 
@@ -281,8 +324,48 @@ function drawRoute(view: MapView, state: MissionState): void {
 // or the rescue walk and carry.
 function drawReturnPath(view: MapView, state: MissionState): void {
   const sim = state.contingency ?? state.sim;
-  const path = sim ? sim.actionPath : [];
-  view.returnPath.setLatLngs(path.map((cell) => cellToLatLng(view.meta, cell)));
+  const points = sim ? sim.actionPath.map((cell) => cellToLatLng(view.meta, cell)) : [];
+  const scenario = sim ? sim.scenario : "none";
+  view.returnPath.setLatLngs(scenario === "none" ? points : []);
+  view.rescuePath.setLatLngs(scenario === "buddy_injured" ? points : []);
+  view.shelterPath.setLatLngs(scenario === "sep_event" ? points : []);
+}
+
+// Banner and terrain partial shelter marker during a solar particle alert.
+function drawSepAlert(view: MapView, state: MissionState): void {
+  view.alertMarkers.clearLayers();
+  const alert = state.scenario === "sep_event" && state.contingency?.scenario === "sep_event" ? state.contingency : null;
+  view.alertBanner.hidden = alert === null;
+  if (!alert) return;
+
+  // Whole minutes, rounded like formatDuration in the panels, so the banner and the shelter table agree.
+  const hasShelter = alert.actionTargetId !== null && alert.actionPath.length > 0;
+  view.alertBanner.textContent = hasShelter
+    ? `Solar particle alert - go to shelter: ${Math.round(alert.actionTimeS / SECONDS_PER_MINUTE)} min (${alert.actionTargetId})`
+    : "Solar particle alert - no full shelter reachable on foot";
+
+  for (const option of alert.shelters) {
+    if (option.kind !== "partial") continue;
+    const marker = L.marker(cellToLatLng(view.meta, option.cell), { icon: divIcon("marker-shelter-partial", "T", 24), keyboard: false, zIndexOffset: 600 });
+    const openSky = option.openSkyShare === null ? "" : `, open sky ${Math.round(option.openSkyShare * 100)}%`;
+    const note = assumptionNote(view.meta, ["SHIELD_PARTIAL_MAX_SKY", "TERRAIN_SHIELD_MODEL"]);
+    tooltip(marker, `Terrain: partial shielding only${openSky}${note}`).addTo(view.alertMarkers);
+  }
+}
+
+function drawPeakMarkers(view: MapView, state: MissionState): void {
+  view.peakMarkers.clearLayers();
+  const plan = state.sciencePlan;
+  if (!plan) return;
+  const scienceNote = assumptionNote(view.meta, ["SCIENCE_WEIGHT_SULFATE", "SCIENCE_WEIGHT_RIDGE", "RIDGE_RADIUS_M", "SCIENCE_PEAK_COUNT"]);
+  for (const peak of plan.candidates) {
+    if (peak.kind !== "peak") continue;
+    const marker = L.marker(cellToLatLng(view.meta, peak), { icon: divIcon("marker-peak", peak.id, 26), zIndexOffset: 90 });
+    const text = `Science peak ${peak.id}: no Curiosity image<br>Science value ${peak.scienceValue} of ${SCIENCE_VALUE_MAX}${scienceNote}<br>Click to add as a stop`;
+    tooltip(marker, text);
+    marker.on("click", () => addStop({ col: peak.col, row: peak.row }));
+    marker.addTo(view.peakMarkers);
+  }
 }
 
 function drawPlanMarkers(view: MapView, state: MissionState): void {
@@ -335,5 +418,10 @@ function drawCrew(view: MapView, state: MissionState): void {
     }
     marker.setLatLng(cellToLatLng(view.meta, astronaut.cell));
     if (!view.map.hasLayer(marker)) marker.addTo(view.map);
+    // Status from the buddy-injured reply; positions are the same in both replies.
+    const status = state.contingency?.astronauts.find((item) => item.id === id)?.status ?? "ok";
+    const element = marker.getElement();
+    element?.classList.toggle("marker-injured", status === "injured");
+    element?.classList.toggle("marker-rescuer", status === "rescuer");
   }
 }

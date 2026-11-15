@@ -1,7 +1,13 @@
 // Phase 4: science planner and contingency simulator. Rules: docs/data-contract.md, section 4.1.
 // Built on the searches in engine.ts. No DOM, no app state: every reply depends only on the grid, params and request.
 
-import { SECONDS_PER_HOUR, SECONDS_PER_MINUTE } from "./constants";
+import {
+  SCIENCE_PEAK_COUNT,
+  SCIENCE_STOP_MIN_SPACING_M,
+  SECONDS_PER_HOUR,
+  SECONDS_PER_MINUTE,
+  SHIELD_PARTIAL_MAX_SKY,
+} from "./constants";
 import {
   Envelope,
   MoveParams,
@@ -11,7 +17,11 @@ import {
   astar,
   cellName,
   checkCell,
+  dijkstra,
+  edgeSurfaceM,
+  fieldPath,
   energyBudgetJ,
+  isImpassable,
   pathStats,
   planRoute,
   rescueMove,
@@ -23,15 +33,26 @@ import { Cell, Grid, cellAt, cellIndex } from "./grid";
 
 // ---- Contract types (docs/data-contract.md, section 4) ----
 
+export type ScienceCandidate = { id: string; col: number; row: number; scienceValue: number; kind: "curiosity" | "peak" };
+
 export type SciencePlan = {
   type: "sciencePlan";
   stops: Cell[];
   stopIds: string[];
   totalValue: number;
   route: Route;
+  candidates: ScienceCandidate[];
 };
 
 export type AstronautId = "A" | "B";
+
+export type ShelterOption = {
+  shelterId: string;
+  kind: "full" | "partial";
+  cell: Cell;
+  timeS: { A: number | null; B: number | null }; // null = no walkable path
+  openSkyShare: number | null; // shield.bin / 255 for "partial", null for "full"
+};
 
 export type SimState = {
   type: "simState";
@@ -45,6 +66,8 @@ export type SimState = {
   actionTargetId: string | null;
   actionTimeS: number;
   actionEnergyJ: number;
+  actionDistanceM: number;
+  shelters: ShelterOption[];
   warnings: string[];
 };
 
@@ -64,8 +87,16 @@ function isNonNegativeNumber(value: unknown): value is number {
 export function planScience(grid: Grid, params: Params, request: ScienceRequest = {}): SciencePlan {
   const budgetJ = request.budgetJ ?? energyBudgetJ(params);
   if (!isNonNegativeNumber(budgetJ)) throw new Error("budgetJ must be a number >= 0");
+  const waypoints: ScienceCandidate[] = grid.meta.waypoints.map((point) => ({
+    id: point.id,
+    col: point.col,
+    row: point.row,
+    scienceValue: point.scienceValue,
+    kind: "curiosity",
+  }));
+  const allCandidates = [...waypoints, ...sciencePeaks(grid, params)];
   // Sorted by id, so a strict "better than" comparison keeps the smaller id on a tie.
-  const candidates = [...grid.meta.waypoints].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const candidates = [...allCandidates].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   const maxStops = request.maxStops ?? candidates.length;
   const maxStopsValid = Number.isInteger(maxStops) && maxStops >= 0;
   if (!maxStopsValid) throw new Error("maxStops must be a whole number >= 0");
@@ -113,19 +144,71 @@ export function planScience(grid: Grid, params: Params, request: ScienceRequest 
     stopIds: chosen.map((point) => point.id),
     totalValue: chosen.reduce((sum, point) => sum + point.scienceValue, 0),
     route: planRoute(grid, params, { stops }),
+    candidates: allCandidates,
   };
 }
 
+// Science peaks (docs/data-contract.md, section 4.1): local maxima of science_val.bin on passable, normal-quality cells
+// reachable on foot from the habitat, best first, spaced SCIENCE_STOP_MIN_SPACING_M from the habitat, the waypoints
+// and each other. Ids p01, p02, ... by rank.
+export function sciencePeaks(grid: Grid, params: Params): ScienceCandidate[] {
+  const { width, height } = grid;
+  const habitat = cellIndex(grid, grid.meta.habitat);
+  const reachable = dijkstra(grid, habitat, walkingMove(params), false).energyJ;
+
+  const maxima: number[] = [];
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      const i = row * width + col;
+      const value = grid.scienceValue[i];
+      const usable = value > 0 && grid.terrainCost[i] !== grid.impassable && grid.demQuality[i] === 0 && reachable[i] < Infinity;
+      if (!usable) continue;
+      let isMaximum = true;
+      for (let dRow = -1; dRow <= 1 && isMaximum; dRow++) {
+        for (let dCol = -1; dCol <= 1; dCol++) {
+          const nCol = col + dCol;
+          const nRow = row + dRow;
+          const inside = nCol >= 0 && nCol < width && nRow >= 0 && nRow < height;
+          if (!inside || (dCol === 0 && dRow === 0)) continue;
+          if (grid.scienceValue[nRow * width + nCol] > value) {
+            isMaximum = false;
+            break;
+          }
+        }
+      }
+      if (isMaximum) maxima.push(i);
+    }
+  }
+  maxima.sort((a, b) => grid.scienceValue[b] - grid.scienceValue[a] || a - b);
+
+  const taken = [habitat, ...grid.meta.waypoints.map((point) => cellIndex(grid, point))];
+  const peaks: ScienceCandidate[] = [];
+  for (const cell of maxima) {
+    if (peaks.length >= SCIENCE_PEAK_COUNT) break;
+    const farEnough = taken.every((other) => straightLineM(grid, cell, other) >= SCIENCE_STOP_MIN_SPACING_M);
+    if (!farEnough) continue;
+    taken.push(cell);
+    const { col, row } = cellAt(grid, cell);
+    const id = `p${String(peaks.length + 1).padStart(2, "0")}`;
+    peaks.push({ id, col, row, scienceValue: grid.scienceValue[cell], kind: "peak" });
+  }
+  return peaks;
+}
+
+// One Dijkstra per point, stopped once every other point is settled: the same minimum-energy legs as one A* per pair,
+// but one search per point instead of one per pair (17 candidates: about 290 searches down to 18).
 function legMatrix(grid: Grid, move: MoveParams, points: Cell[]): Leg[][] {
   const habitat = cellIndex(grid, grid.meta.habitat);
-  return points.map((from) =>
-    points.map((to) => {
-      const result = astar(grid, cellIndex(grid, from), cellIndex(grid, to), move);
-      if (!result) return NO_LEG;
-      const farthestM = Math.max(...result.path.map((cell) => straightLineM(grid, cell, habitat)));
-      return { energyJ: result.energyJ, timeS: result.timeS, farthestM };
-    }),
-  );
+  const cells = points.map((point) => cellIndex(grid, point));
+  return cells.map((from) => {
+    const field = dijkstra(grid, from, move, false, cells);
+    return cells.map((to) => {
+      const path = fieldPath(field, to);
+      if (!path) return NO_LEG;
+      const farthestM = Math.max(...path.map((cell) => straightLineM(grid, cell, habitat)));
+      return { energyJ: field.energyJ[to], timeS: field.timeS[to], farthestM };
+    });
+  });
 }
 
 // Walking legs plus the time and energy at each stop (every tour point except the first and last).
@@ -170,6 +253,8 @@ export type SimRequest = {
   start?: Cell;
   end?: Cell;
   delaysS?: { A?: number; B?: number };
+  injured?: AstronautId; // "buddy_injured" only. Missing = the crewmember that is not `astronaut`
+  bPosition?: Cell; // B stands here instead of on the plan timeline (the user dragged B)
 };
 
 const SCENARIOS = ["none", "sep_event", "buddy_injured"];
@@ -184,7 +269,9 @@ type Outcome = {
   targetId: string | null;
   timeS: number;
   energyJ: number;
+  distanceM: number;
   injuredId: AstronautId | null;
+  shelters?: ShelterOption[];
 };
 
 export function simulate(grid: Grid, params: Params, request: SimRequest): SimState {
@@ -194,6 +281,12 @@ export function simulate(grid: Grid, params: Params, request: SimRequest): SimSt
   const delayA = request.delaysS?.A ?? 0;
   const delayB = request.delaysS?.B ?? 0;
   if (!isNonNegativeNumber(delayA) || !isNonNegativeNumber(delayB)) throw new Error("delaysS must be numbers >= 0");
+  const injuredGiven = request.injured !== undefined;
+  if (injuredGiven && request.injured !== "A" && request.injured !== "B") throw new Error('injured must be "A" or "B"');
+  if (request.bPosition !== undefined) {
+    checkCell(grid, request.bPosition, "bPosition");
+    if (isImpassable(grid, request.bPosition)) throw new Error("bPosition is on an impassable cell");
+  }
 
   const stops = request.stops ?? [];
   const plan = planRoute(grid, params, { start: request.start, end: request.end, stops });
@@ -212,8 +305,13 @@ export function simulate(grid: Grid, params: Params, request: SimRequest): SimSt
   };
   const crewA = positionAt("A", delayA);
   const crewB = positionAt("B", delayB);
+  // A dragged B keeps the timeline energy: the model does not know how B got to the new cell.
+  if (request.bPosition) crewB.cell = cellIndex(grid, request.bPosition);
   const self = request.astronaut === "A" ? crewA : crewB;
   const other = request.astronaut === "A" ? crewB : crewA;
+  const injuredId = request.injured ?? other.id;
+  const injured = injuredId === "A" ? crewA : crewB;
+  const rescuer = injuredId === "A" ? crewB : crewA;
 
   const warnings: string[] = [];
   const separationM = straightLineM(grid, crewA.cell, crewB.cell);
@@ -223,7 +321,7 @@ export function simulate(grid: Grid, params: Params, request: SimRequest): SimSt
 
   let outcome: Outcome;
   if (request.scenario === "sep_event") outcome = sepEvent(grid, params, request.atTimeS, self, crewA, crewB, warnings);
-  else if (request.scenario === "buddy_injured") outcome = buddyInjured(grid, params, request.atTimeS, self, other, warnings);
+  else if (request.scenario === "buddy_injured") outcome = buddyInjured(grid, params, request.atTimeS, rescuer, injured, warnings);
   else outcome = noEvent(grid, params, request.atTimeS, self, warnings);
 
   const statusOf = (id: AstronautId): "ok" | "injured" | "rescuer" => {
@@ -247,6 +345,8 @@ export function simulate(grid: Grid, params: Params, request: SimRequest): SimSt
     actionTargetId: outcome.targetId,
     actionTimeS: outcome.timeS,
     actionEnergyJ: outcome.energyJ,
+    actionDistanceM: outcome.distanceM,
+    shelters: outcome.shelters ?? [],
     warnings,
   };
 }
@@ -282,7 +382,7 @@ function noEvent(grid: Grid, params: Params, atTimeS: number, self: Crewmember, 
   const action = atTimeS < envelope.turnBackAtS ? "continue" : "return";
   const home = astar(grid, self.cell, cellIndex(grid, grid.meta.habitat), walkingMove(params));
   if (!home) warnings.push(`No walkable path from ${cellName(grid, cellAt(grid, self.cell))} to the habitat`);
-  return { envelope, action, injuredId: null, targetId: "habitat", ...pathFields(home) };
+  return { envelope, action, injuredId: null, targetId: "habitat", ...pathFields(grid, home) };
 }
 
 // The crew stays together: the chosen shelter is the one where the later of the two arrives first.
@@ -296,11 +396,15 @@ function sepEvent(
   warnings: string[],
 ): Outcome {
   const move = walkingMove(params);
+  const shelters: ShelterOption[] = [];
   let best: { id: string; cell: Cell; laterS: number; selfPath: SearchResult } | null = null;
-  for (const shelter of grid.meta.shelters) {
+  // Only full shelters are recommended (FULL_SHELTERS). Terrain gives partial shielding only.
+  for (const shelter of grid.meta.shelters.filter((item) => item.kind === "full")) {
     const target = cellIndex(grid, shelter);
     const pathA = astar(grid, crewA.cell, target, move);
     const pathB = astar(grid, crewB.cell, target, move);
+    const cell = { col: shelter.col, row: shelter.row };
+    shelters.push({ shelterId: shelter.id, kind: "full", cell, timeS: { A: pathA?.timeS ?? null, B: pathB?.timeS ?? null }, openSkyShare: null });
     if (!pathA || !pathB) continue;
     const laterS = Math.max(pathA.timeS, pathB.timeS);
     const better = !best || laterS < best.laterS || (laterS === best.laterS && shelter.id < best.id);
@@ -308,12 +412,25 @@ function sepEvent(
     best = { id: shelter.id, cell: shelter, laterS, selfPath: self.id === "A" ? pathA : pathB };
   }
 
+  const partial = nearestPartialShelter(grid, move, self.cell);
+  if (partial !== null) {
+    const pathA = astar(grid, crewA.cell, partial, move);
+    const pathB = astar(grid, crewB.cell, partial, move);
+    shelters.push({
+      shelterId: "terrain",
+      kind: "partial",
+      cell: cellAt(grid, partial),
+      timeS: { A: pathA?.timeS ?? null, B: pathB?.timeS ?? null },
+      openSkyShare: grid.shield[partial] / SHIELD_BYTE_MAX,
+    });
+  }
+
   warnings.push("Charged particles can arrive in tens of minutes (SEP_ARRIVAL)");
   const position = cellAt(grid, self.cell);
   if (!best) {
     warnings.push("No full shelter is reachable on foot by both crewmembers");
     const envelope = walkback(grid, params, { elapsedS: atTimeS, usedJ: self.usedJ, position });
-    return { envelope, action: "go_to_shelter", injuredId: null, targetId: null, ...pathFields(null) };
+    return { envelope, action: "go_to_shelter", injuredId: null, targetId: null, shelters, ...pathFields(grid, null) };
   }
 
   const targetS = params.SEP_SHELTER_TARGET_MIN * SECONDS_PER_MINUTE;
@@ -321,7 +438,24 @@ function sepEvent(
     warnings.push(`The crew needs ${minutes(best.laterS)} min to reach ${best.id}, above the ${params.SEP_SHELTER_TARGET_MIN} min shelter target`);
   }
   const envelope = walkback(grid, params, { elapsedS: atTimeS, usedJ: self.usedJ, returnPoint: best.cell, position });
-  return { envelope, action: "go_to_shelter", injuredId: null, targetId: best.id, ...pathFields(best.selfPath) };
+  return { envelope, action: "go_to_shelter", injuredId: null, targetId: best.id, shelters, ...pathFields(grid, best.selfPath) };
+}
+
+// shield.bin is uint8: 255 = open sky (docs/data-contract.md, section 1).
+const SHIELD_BYTE_MAX = 255;
+
+// The passable cell with open sky <= SHIELD_PARTIAL_MAX_SKY that `from` reaches in the least walking time.
+// Ties: the smaller cell index. null when none is reachable.
+function nearestPartialShelter(grid: Grid, move: MoveParams, from: number): number | null {
+  const field = dijkstra(grid, from, move, false);
+  let best: number | null = null;
+  for (let i = 0; i < field.timeS.length; i++) {
+    const sheltered = grid.shield[i] / SHIELD_BYTE_MAX <= SHIELD_PARTIAL_MAX_SKY;
+    const reachable = field.timeS[i] < Infinity;
+    if (!sheltered || !reachable) continue;
+    if (best === null || field.timeS[i] < field.timeS[best]) best = i;
+  }
+  return best;
 }
 
 type RescueOption = { id: string; carry: SearchResult; totalTimeS: number; failedLimits: string[] };
@@ -344,7 +478,7 @@ function buddyInjured(
   const base = { envelope, injuredId: injured.id };
   if (!walk) {
     warnings.push("No walkable path from the rescuer to the injured crewmember");
-    return { ...base, action: "go_to_rover_pickup", targetId: null, ...pathFields(null) };
+    return { ...base, action: "go_to_rover_pickup", targetId: null, ...pathFields(grid, null) };
   }
 
   const budgetJ = energyBudgetJ(params);
@@ -362,7 +496,7 @@ function buddyInjured(
 
   const home = option("habitat", grid.meta.habitat);
   if (home && home.failedLimits.length === 0) {
-    return { ...base, action: "return", targetId: "habitat", ...rescueFields(walk, home.carry) };
+    return { ...base, action: "return", targetId: "habitat", ...rescueFields(grid, walk, home.carry) };
   }
   if (home) warnings.push(`Carrying the injured crewmember to the habitat exceeds ${home.failedLimits.join(", ")}`);
   else warnings.push("No walkable path from the injured crewmember to the habitat");
@@ -375,25 +509,38 @@ function buddyInjured(
   const chosen = feasible ?? pickups[0];
   if (!chosen) {
     warnings.push("No rover pickup zone is reachable");
-    return { ...base, action: "go_to_rover_pickup", targetId: null, ...pathFields(null) };
+    return { ...base, action: "go_to_rover_pickup", targetId: null, ...pathFields(grid, null) };
   }
-  if (!feasible) warnings.push(`No rover pickup zone fits the limits. ${chosen.id} exceeds ${chosen.failedLimits.join(", ")}`);
+  if (!feasible) {
+    warnings.push("Rescue not feasible on foot within budget");
+    warnings.push(`No rover pickup zone fits the limits. ${chosen.id} exceeds ${chosen.failedLimits.join(", ")}`);
+  }
   warnings.push("Rover driving to the pickup zone is not modeled");
-  return { ...base, action: "go_to_rover_pickup", targetId: chosen.id, ...rescueFields(walk, chosen.carry) };
+  return { ...base, action: "go_to_rover_pickup", targetId: chosen.id, ...rescueFields(grid, walk, chosen.carry) };
 }
 
-function pathFields(result: SearchResult | null): { path: number[]; timeS: number; energyJ: number } {
-  if (!result) return { path: [], timeS: 0, energyJ: 0 };
-  return { path: result.path, timeS: result.timeS, energyJ: result.energyJ };
+type PathFields = { path: number[]; timeS: number; energyJ: number; distanceM: number };
+
+function pathFields(grid: Grid, result: SearchResult | null): PathFields {
+  if (!result) return { path: [], timeS: 0, energyJ: 0, distanceM: 0 };
+  return { path: result.path, timeS: result.timeS, energyJ: result.energyJ, distanceM: surfaceLengthM(grid, result.path) };
 }
 
 // Walk path then carry path. The injured cell ends the first and starts the second: keep it once.
-function rescueFields(walk: SearchResult, carry: SearchResult): { path: number[]; timeS: number; energyJ: number } {
+function rescueFields(grid: Grid, walk: SearchResult, carry: SearchResult): PathFields {
+  const path = [...walk.path, ...carry.path.slice(1)];
   return {
-    path: [...walk.path, ...carry.path.slice(1)],
+    path,
     timeS: walk.timeS + carry.timeS,
     energyJ: walk.energyJ + carry.energyJ,
+    distanceM: surfaceLengthM(grid, path),
   };
+}
+
+function surfaceLengthM(grid: Grid, path: number[]): number {
+  let total = 0;
+  for (let i = 1; i < path.length; i++) total += edgeSurfaceM(grid, path[i - 1], path[i]);
+  return total;
 }
 
 function minutes(seconds: number): string {

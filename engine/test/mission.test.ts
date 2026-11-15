@@ -1,12 +1,20 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { EVA_DURATION_H, SECONDS_PER_HOUR, SECONDS_PER_MINUTE } from "../src/constants";
+import {
+  EVA_DURATION_H,
+  SCIENCE_PEAK_COUNT,
+  SCIENCE_STOP_MIN_SPACING_M,
+  SECONDS_PER_HOUR,
+  SECONDS_PER_MINUTE,
+  SHIELD_PARTIAL_MAX_SKY,
+} from "../src/constants";
 import {
   Params,
   applyParams,
   astar,
   defaultParams,
+  dijkstra,
   energyBudgetJ,
   pathStats,
   planRoute,
@@ -15,7 +23,7 @@ import {
   walkingMove,
 } from "../src/engine";
 import { Grid, Meta, cellIndex, parseSite } from "../src/grid";
-import { SimRequest, SimState, planScience, simulate } from "../src/mission";
+import { SimRequest, SimState, planScience, sciencePeaks, simulate } from "../src/mission";
 import { createState, handleMessage } from "../src/worker";
 import { makeFixtureSite } from "./fixtures";
 
@@ -152,6 +160,61 @@ describe("simulate: buddy injured", () => {
     expect(state.actionPath[0]).toEqual(rescuer.cell);
     expect(state.actionPath).toContainEqual(injured.cell);
   });
+
+  it("injured A makes B the rescuer, and the action is B's whatever `astronaut` is", () => {
+    const grid = fixtureGrid();
+    const state = atFirstStop(grid, defaultParams(), "buddy_injured", { injured: "A", delaysS: { B: 300 } });
+    const [crewA, crewB] = state.astronauts;
+    expect([crewA.status, crewB.status]).toEqual(["injured", "rescuer"]);
+    expect(state.actionPath[0]).toEqual(crewB.cell);
+    expect(state.actionPath).toContainEqual(crewA.cell);
+  });
+
+  it("actionDistanceM is the surface length of actionPath", () => {
+    const grid = fixtureGrid();
+    const params = defaultParams();
+    const state = atFirstStop(grid, params, "buddy_injured", { delaysS: { B: 300 } });
+    const cells = state.actionPath.map((cell) => cellIndex(grid, cell));
+    const lengthM = pathStats(grid, cells, walkingMove(params)).distanceM[cells.length - 1];
+    expect(state.actionDistanceM).toBeGreaterThan(0);
+    expect(state.actionDistanceM).toBeCloseTo(lengthM, 6);
+  });
+
+  it("bPosition moves B (also the separation) and keeps B's timeline energy", () => {
+    const grid = fixtureGrid();
+    const params = defaultParams();
+    const onTimeline = atFirstStop(grid, params, "none");
+    const bPosition = { ...grid.meta.habitat };
+    const dragged = atFirstStop(grid, params, "none", { bPosition });
+    expect(dragged.astronauts[1].cell).toEqual(bPosition);
+    expect(dragged.astronauts[1].usedJ).toBe(onTimeline.astronauts[1].usedJ);
+    expect(dragged.separationM).toBeCloseTo(straightLineM(grid, cellIndex(grid, dragged.astronauts[0].cell), cellIndex(grid, bPosition)), 9);
+    const rescue = atFirstStop(grid, params, "buddy_injured", { bPosition });
+    expect(rescue.actionPath).toContainEqual(bPosition);
+  });
+
+  it("rejects a bad `injured` and a bPosition outside the grid or on an impassable cell", () => {
+    const grid = fixtureGrid();
+    const params = defaultParams();
+    const impassable = grid.terrainCost.findIndex((value) => value === grid.impassable);
+    expect(impassable).toBeGreaterThanOrEqual(0);
+    const wall = { col: impassable % grid.width, row: Math.floor(impassable / grid.width) };
+    expect(() => atFirstStop(grid, params, "buddy_injured", { injured: "C" as "A" })).toThrow(/injured/);
+    expect(() => atFirstStop(grid, params, "none", { bPosition: { col: -1, row: 0 } })).toThrow(/bPosition/);
+    expect(() => atFirstStop(grid, params, "none", { bPosition: wall })).toThrow(/bPosition/);
+  });
+
+  it('warns "Rescue not feasible on foot within budget" when no target fits', () => {
+    const grid = fixtureGrid();
+    const base = defaultParams();
+    // The budget is what the crew used to reach s1: any carry exceeds it.
+    const usedJ = planRoute(grid, base, { stops: [grid.meta.waypoints[0]] }).legs[0].energyJ;
+    const params = applyParams(base, { EVA_ENERGY_BUDGET_J: usedJ });
+    const state = atFirstStop(grid, params, "buddy_injured");
+    expect(state.recommendedAction).toBe("go_to_rover_pickup");
+    expect(state.actionTargetId).not.toBeNull();
+    expect(state.warnings).toContain("Rescue not feasible on foot within budget");
+  });
 });
 
 describe("simulate: solar particle event", () => {
@@ -171,6 +234,44 @@ describe("simulate: solar particle event", () => {
     expect(state.actionTargetId).toBe(laterS[0].id);
     expect(state.warnings).toContain("Charged particles can arrive in tens of minutes (SEP_ARRIVAL)");
     expectNoImpassableCell(grid, state);
+  });
+
+  it("lists every full shelter with both times, then the nearest terrain partial shelter, and recommends a full one", () => {
+    const grid = fixtureGrid();
+    const params = defaultParams();
+    const state = atFirstStop(grid, params, "sep_event", { delaysS: { B: 1e6 } });
+    const move = walkingMove(params);
+    const [a, b] = state.astronauts.map((crew) => cellIndex(grid, crew.cell));
+
+    const full = state.shelters.filter((option) => option.kind === "full");
+    expect(full.map((option) => option.shelterId)).toEqual(grid.meta.shelters.map((shelter) => shelter.id));
+    for (const option of full) {
+      expect(option.timeS.A).toBeCloseTo(astar(grid, a, cellIndex(grid, option.cell), move)!.timeS, 6);
+      expect(option.timeS.B).toBeCloseTo(astar(grid, b, cellIndex(grid, option.cell), move)!.timeS, 6);
+      expect(option.openSkyShare).toBeNull();
+    }
+    expect(full.some((option) => option.shelterId === state.actionTargetId)).toBe(true);
+
+    const partial = state.shelters.filter((option) => option.kind === "partial");
+    expect(partial).toHaveLength(1);
+    const cell = cellIndex(grid, partial[0].cell);
+    expect(partial[0].openSkyShare).toBeLessThanOrEqual(SHIELD_PARTIAL_MAX_SKY);
+    expect(partial[0].openSkyShare).toBeCloseTo(grid.shield[cell] / 255, 9);
+    // No sheltered cell is reached faster from A.
+    const field = dijkstra(grid, a, move, false);
+    for (let i = 0; i < grid.shield.length; i++) {
+      if (grid.shield[i] / 255 <= SHIELD_PARTIAL_MAX_SKY) expect(field.timeS[i]).toBeGreaterThanOrEqual(field.timeS[cell]);
+    }
+    expect(partial[0].timeS.A).toBeCloseTo(astar(grid, a, cell, move)!.timeS, 6);
+  });
+
+  it("has no partial shelter when no cell is sheltered, and no shelter list outside sep_event", () => {
+    const site = makeFixtureSite();
+    site.files["shield.bin"] = new Uint8Array(site.meta.width * site.meta.height).fill(255).buffer as ArrayBuffer;
+    const grid = parseSite(site.meta, site.files);
+    const state = atFirstStop(grid, defaultParams(), "sep_event");
+    expect(state.shelters.every((option) => option.kind === "full")).toBe(true);
+    expect(atFirstStop(fixtureGrid(), defaultParams(), "none").shelters).toEqual([]);
   });
 
   it("warns only when the shelter is farther than SEP_SHELTER_TARGET_MIN", () => {
@@ -213,6 +314,58 @@ describe("planScience", () => {
     expect(plan.stopIds.length).toBeLessThan(2);
     expect(plan.route.totalEnergyJ).toBeLessThanOrEqual(budgetJ * (1 - params.RESERVE_FRACTION));
     expect(planScience(grid, params, { budgetJ: 0 }).stopIds).toEqual([]);
+  });
+});
+
+// The fixture plus single-cell science bumps. A: valid peak. B: 5 cells from A (too close). C: valid, lower.
+// D: in the low-confidence east strip. E: on an impassable cell.
+function fixtureWithPeaks(): { grid: Grid; cells: Record<string, number> } {
+  const site = makeFixtureSite();
+  const width = site.meta.width;
+  const science = new Uint8Array(site.files["science_val.bin"].slice(0));
+  const cost = new Uint8Array(site.files["terrain_cost.bin"]);
+  const impassable = cost.findIndex((value) => value === 255);
+  const cells = { A: 150 * width + 40, B: 152 * width + 45, C: 120 * width + 150, D: 150 * width + 197, E: impassable };
+  const values = { A: 180, B: 170, C: 160, D: 250, E: 240 };
+  for (const key of Object.keys(cells) as (keyof typeof cells)[]) science[cells[key]] = values[key];
+  site.files["science_val.bin"] = science.buffer as ArrayBuffer;
+  return { grid: parseSite(site.meta, site.files), cells };
+}
+
+describe("planScience with science peaks", () => {
+  it("peaks are spaced local maxima on passable, normal-quality cells, best first", () => {
+    const { grid, cells } = fixtureWithPeaks();
+    const peaks = sciencePeaks(grid, defaultParams());
+    expect(peaks.map((peak) => [peak.id, cellIndex(grid, peak)])).toEqual([
+      ["p01", cells.A],
+      ["p02", cells.C],
+    ]);
+    expect(peaks.length).toBeLessThanOrEqual(SCIENCE_PEAK_COUNT);
+    const others = [grid.meta.habitat, ...grid.meta.waypoints, ...peaks].map((point) => cellIndex(grid, point));
+    for (const peak of peaks) {
+      expect(peak.kind).toBe("peak");
+      const here = cellIndex(grid, peak);
+      for (const other of others) {
+        if (other !== here) expect(straightLineM(grid, here, other)).toBeGreaterThanOrEqual(SCIENCE_STOP_MIN_SPACING_M);
+      }
+    }
+  });
+
+  it("the plan considers the peaks and never exceeds the budget, at any budget", () => {
+    const { grid } = fixtureWithPeaks();
+    const params = defaultParams();
+    const full = planScience(grid, params);
+    expect(full.candidates.map((candidate) => candidate.id)).toEqual(["s1", "s2", "p01", "p02"]);
+    expect(full.stopIds.some((id) => id.startsWith("p"))).toBe(true);
+    const evaS = params.EVA_DURATION_H * SECONDS_PER_HOUR;
+    for (const share of [0.2, 0.4, 0.6, 0.8, 1, 1.5]) {
+      const budgetJ = (share * full.route.totalEnergyJ) / (1 - params.RESERVE_FRACTION);
+      const plan = planScience(grid, params, { budgetJ });
+      expect(plan.route.totalEnergyJ).toBeLessThanOrEqual(budgetJ * (1 - params.RESERVE_FRACTION));
+      expect(plan.route.totalTimeS).toBeLessThanOrEqual(evaS);
+      const values = new Map(plan.candidates.map((candidate) => [candidate.id, candidate.scienceValue]));
+      expect(plan.totalValue).toBe(plan.stopIds.reduce((sum, id) => sum + (values.get(id) ?? 0), 0));
+    }
   });
 });
 

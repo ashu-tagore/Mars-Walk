@@ -25,6 +25,7 @@ import {
   SANTEE_UPHILL_COEF,
   SECONDS_PER_HOUR,
   SECONDS_PER_MINUTE,
+  TURN_ANGLE_DEG,
   SEP_SHELTER_TARGET_MIN,
   STATION_WORK_W,
   STOP_DWELL_MIN,
@@ -37,6 +38,9 @@ import { Cell, Grid, cellAt, cellIndex, isInside } from "./grid";
 
 export type RouteLeg = { from: string; to: string; distanceM: number; energyJ: number; timeS: number };
 
+// cellIndex = index in Route.path where the step starts (docs/data-contract.md, section 4.2).
+export type Instruction = { text: string; direction: string; distanceM: number; warning?: string; cellIndex: number };
+
 export type Route = {
   type: "route";
   path: Cell[];
@@ -48,6 +52,7 @@ export type Route = {
   elevationProfile: { distanceM: number; elevationM: number }[];
   verdict: "GO" | "CAUTION" | "NO_GO";
   reasons: string[];
+  instructions: Instruction[];
 };
 
 export type Envelope = {
@@ -407,19 +412,23 @@ function tracePath(cameFrom: Int32Array, goal: number): number[] {
 }
 
 // distanceM: surface length of the minimum-energy path (needed for the rescue carry limit).
-export type FieldResult = { energyJ: Float64Array; timeS: Float64Array; distanceM: Float64Array };
+// cameFrom: the previous cell on that path (-1 at the source and at cells not reached).
+export type FieldResult = { energyJ: Float64Array; timeS: Float64Array; distanceM: Float64Array; cameFrom: Int32Array };
 
 // Dijkstra from one source to all cells.
 // reversed = false: energyJ[i] = cost of walking source -> i.
 // reversed = true:  energyJ[i] = cost of walking i -> source. Expanding u -> v uses the cost of the edge v -> u,
 // because Santee energy is directional and the walk-back is the walk TO the source.
-export function dijkstra(grid: Grid, source: number, move: MoveParams, reversed: boolean): FieldResult {
+// stopAfter: when given, the search stops once all these cells are settled (their values are final; others may not be).
+export function dijkstra(grid: Grid, source: number, move: MoveParams, reversed: boolean, stopAfter: number[] = []): FieldResult {
   const cellCount = grid.width * grid.height;
   const energy = new Float64Array(cellCount).fill(Infinity);
   const time = new Float64Array(cellCount).fill(Infinity);
   const distance = new Float64Array(cellCount).fill(Infinity);
   const closed = new Uint8Array(cellCount);
+  const cameFrom = new Int32Array(cellCount).fill(-1);
   const heap = createHeap(cellCount, energy);
+  const waiting = new Set(stopAfter);
 
   energy[source] = 0;
   time[source] = 0;
@@ -431,6 +440,8 @@ export function dijkstra(grid: Grid, source: number, move: MoveParams, reversed:
   while (heap.size > 0) {
     const u = heapPop(heap);
     closed[u] = 1;
+    waiting.delete(u);
+    if (stopAfter.length > 0 && waiting.size === 0) break;
 
     const col = u % width;
     const row = (u - col) / width;
@@ -449,10 +460,17 @@ export function dijkstra(grid: Grid, source: number, move: MoveParams, reversed:
       energy[v] = candidate;
       time[v] = time[u] + (reversed ? edgeTimeS(grid, v, u, move) : edgeTimeS(grid, u, v, move));
       distance[v] = distance[u] + edgeSurfaceM(grid, u, v);
+      cameFrom[v] = u;
       heapPushOrDecrease(heap, v);
     }
   }
-  return { energyJ: energy, timeS: time, distanceM: distance };
+  return { energyJ: energy, timeS: time, distanceM: distance, cameFrom };
+}
+
+// The minimum-energy path source -> goal from a forward dijkstra field, or null when the goal was not reached.
+export function fieldPath(field: FieldResult, goal: number): number[] | null {
+  if (field.energyJ[goal] === Infinity) return null;
+  return tracePath(field.cameFrom, goal);
 }
 
 // ---- Route statistics ----
@@ -513,6 +531,8 @@ export function planRoute(grid: Grid, params: Params, request: RouteRequest): Ro
   const reasons: string[] = [];
   const path: number[] = [];
   const legs: RouteLeg[] = [];
+  // Path index where each leg ends, for the turn-by-turn steps (a stop always ends a step).
+  const legEnds: number[] = [];
   let noPath = false;
 
   for (const point of points) {
@@ -542,6 +562,7 @@ export function planRoute(grid: Grid, params: Params, request: RouteRequest): Ro
     // Each leg starts on the cell where the previous one ended. Keep that cell once.
     const firstNew = path.length === 0 ? 0 : 1;
     for (let j = firstNew; j < leg.path.length; j++) path.push(leg.path[j]);
+    legEnds.push(path.length - 1);
   }
 
   const stats = pathStats(grid, path, move);
@@ -567,7 +588,111 @@ export function planRoute(grid: Grid, params: Params, request: RouteRequest): Ro
     elevationProfile,
     verdict,
     reasons,
+    instructions: noPath ? [] : routeInstructions(grid, params, path, stats, legEnds, legs),
   };
+}
+
+// ---- Turn-by-turn instructions (docs/data-contract.md, section 4.2) ----
+
+const COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+const COMPASS_STEP_DEG = 45;
+const FULL_TURN_DEG = 360;
+const HALF_TURN_DEG = 180;
+
+// Compass bearing from cell a to cell b: 0 = north (row 0 is the north edge), 90 = east.
+function bearingDeg(grid: Grid, a: number, b: number): number {
+  const from = cellAt(grid, a);
+  const to = cellAt(grid, b);
+  const deg = Math.atan2(to.col - from.col, from.row - to.row) / DEG;
+  return (deg + FULL_TURN_DEG) % FULL_TURN_DEG;
+}
+
+function headingChangeDeg(a: number, b: number): number {
+  const diff = Math.abs(a - b) % FULL_TURN_DEG;
+  return diff > HALF_TURN_DEG ? FULL_TURN_DEG - diff : diff;
+}
+
+// Horizontal distance (m) of cell p from the straight line a-b.
+function offLineM(grid: Grid, p: number, a: number, b: number): number {
+  const pa = cellAt(grid, a);
+  const pb = cellAt(grid, b);
+  const pp = cellAt(grid, p);
+  const dx = pb.col - pa.col;
+  const dy = pb.row - pa.row;
+  const length = Math.hypot(dx, dy);
+  if (length === 0) return Math.hypot(pp.col - pa.col, pp.row - pa.row) * grid.cellSizeM;
+  return (Math.abs(dx * (pa.row - pp.row) - dy * (pa.col - pp.col)) / length) * grid.cellSizeM;
+}
+
+// Douglas-Peucker on path[first..last]: the path indices of the corners. An 8-connected path zigzags (N, NE, N, ...)
+// to follow a straight line, so raw edge headings jump by 45 deg. Points within one cell of the line are not corners:
+// a cell is the grid's own resolution (ROUTING_CELL_SIZE_M).
+function corners(grid: Grid, path: number[], first: number, last: number): number[] {
+  const keep = [first, last];
+  const spans: [number, number][] = [[first, last]];
+  while (spans.length > 0) {
+    const [a, b] = spans.pop() as [number, number];
+    let farthest = -1;
+    let farthestM = grid.cellSizeM;
+    for (let i = a + 1; i < b; i++) {
+      const offM = offLineM(grid, path[i], path[a], path[b]);
+      if (offM > farthestM) {
+        farthest = i;
+        farthestM = offM;
+      }
+    }
+    if (farthest < 0) continue;
+    keep.push(farthest);
+    spans.push([a, farthest], [farthest, b]);
+  }
+  return keep.sort((x, y) => x - y);
+}
+
+function routeInstructions(
+  grid: Grid,
+  params: Params,
+  path: number[],
+  stats: PathStats,
+  legEnds: number[],
+  legs: RouteLeg[],
+): Instruction[] {
+  // Step boundaries: each leg end, and each corner where the heading turns more than TURN_ANGLE_DEG from the
+  // heading of the first segment of the current step, and stays turned: the segment after it also differs by more
+  // than TURN_ANGLE_DEG (or the leg ends). A single jog around an obstacle that comes back to the heading is not a turn.
+  const bounds: number[] = [0];
+  let legStart = 0;
+  for (const legEnd of legEnds) {
+    const legCorners = corners(grid, path, legStart, legEnd);
+    const segmentHeading = (k: number) => bearingDeg(grid, path[legCorners[k]], path[legCorners[k + 1]]);
+    const segmentCount = legCorners.length - 1;
+    let stepHeading = segmentHeading(0);
+    for (let k = 1; k < segmentCount; k++) {
+      const turned = headingChangeDeg(segmentHeading(k), stepHeading) > TURN_ANGLE_DEG;
+      const isLastSegment = k + 1 === segmentCount;
+      const staysTurned = isLastSegment || headingChangeDeg(segmentHeading(k + 1), stepHeading) > TURN_ANGLE_DEG;
+      if (!turned || !staysTurned) continue;
+      bounds.push(legCorners[k]);
+      stepHeading = segmentHeading(k);
+    }
+    if (legEnd > bounds[bounds.length - 1]) bounds.push(legEnd);
+    legStart = legEnd;
+  }
+
+  const instructions: Instruction[] = [];
+  for (let s = 0; s + 1 < bounds.length; s++) {
+    const start = bounds[s];
+    const end = bounds[s + 1];
+    const direction = COMPASS[Math.round(bearingDeg(grid, path[start], path[end]) / COMPASS_STEP_DEG) % COMPASS.length];
+    const distanceM = stats.distanceM[end] - stats.distanceM[start];
+    const legIndex = legEnds.indexOf(end);
+    const target = legIndex >= 0 ? ` to ${legs[legIndex].to}` : "";
+    const instruction: Instruction = { text: `Head ${direction} for ${Math.round(distanceM)} m${target}`, direction, distanceM, cellIndex: start };
+    let steepestDeg = 0;
+    for (let i = start; i < end; i++) steepestDeg = Math.max(steepestDeg, edgeSlopeDeg(grid, path[i], path[i + 1]));
+    if (steepestDeg > params.CAUTION_SLOPE_DEG) instruction.warning = `Caution slope (${params.CAUTION_SLOPE_DEG}-${params.MAX_SLOPE_DEG} deg)`;
+    instructions.push(instruction);
+  }
+  return instructions;
 }
 
 // Rules: docs/assumptions.md, section "Engine". Adds one reason line per trigger.

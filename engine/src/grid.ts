@@ -1,7 +1,7 @@
 // Load the pipeline output (docs/data-contract.md, sections 1 and 2) into typed arrays.
 
 // docs/data-contract.md "version". The engine reads only this meta.json version.
-export const CONTRACT_VERSION = 9;
+export const CONTRACT_VERSION = 10;
 
 export type Cell = { col: number; row: number };
 
@@ -88,6 +88,10 @@ export type Grid = {
   terrainScale: number;
   impassable: number;
   demQuality: Uint8Array;
+  // 0 = full shielding, 255 = open sky (zenith-weighted). Used for terrain partial shelters.
+  shield: Uint8Array;
+  // 0 to 255 (docs/data-contract.md, section 1). Used for the science peaks of the planner.
+  scienceValue: Uint8Array;
   // Smallest passable terrain multiplier in the grid. A* needs it for a heuristic that never overestimates.
   minTerrainMultiplier: number;
 };
@@ -163,14 +167,15 @@ export function parseSite(meta: Meta, files: Record<string, ArrayBuffer>): Grid 
     terrainScale,
     impassable,
     demQuality: readUint8(files[layers.demQuality.file], count, layers.demQuality.file),
+    shield: readUint8(files[layers.shield.file], count, layers.shield.file),
+    scienceValue: readUint8(files[layers.scienceValue.file], count, layers.scienceValue.file),
     minTerrainMultiplier: minCostByte * terrainScale,
   };
 }
 
-// The layers the engine reads. shield.bin and science_val.bin are not loaded (2 MB): the planner ranks the meta.json
-// waypoints, and shelterTimes returns only the meta.json full shelters. Terrain partial shelters from shield.bin
-// need a rule and a contract change first (docs/data-contract.md, section 4; docs/build-plan.md, Phase 2).
-const ENGINE_LAYERS = ["elevation", "terrainCost", "demQuality"] as const;
+// Every layer is read. shield.bin gives the terrain partial shelters of a solar particle event, science_val.bin the
+// science peaks of the planner (docs/data-contract.md, section 4.1).
+const ENGINE_LAYERS = ["elevation", "terrainCost", "demQuality", "shield", "scienceValue"] as const;
 
 type FetchFn =(url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown>; arrayBuffer(): Promise<ArrayBuffer> }>;
 

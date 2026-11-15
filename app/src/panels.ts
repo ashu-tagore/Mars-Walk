@@ -7,6 +7,7 @@ import {
   type MissionState,
   type Route,
   type Scenario,
+  type SciencePlan,
   type SimState,
   type SiteMeta,
   getState,
@@ -18,6 +19,8 @@ import {
 } from "./store";
 
 const DASH = "--";
+const AUTO_PLAN_LABEL = "Auto-plan stops";
+export const PEAK_LABEL = "science peak, no Curiosity image";
 // DEFINITION rows of docs/assumptions.md ("Units").
 export const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_MINUTE = 60;
@@ -78,9 +81,10 @@ export const DEPENDS = {
   timeline: ["STOP_DWELL_MIN", "WALK_SPEED_M_PER_S", ...ROUTE, ...ENERGY],
   buddy: ["BUDDY_MAX_SEPARATION_M"],
   sepEvent: ["SEP_SHELTER_TARGET_MIN", "FULL_SHELTERS"],
+  partialShelter: ["SHIELD_PARTIAL_MAX_SKY", "TERRAIN_SHIELD_MODEL"],
   rescue: ["RESCUE_SPEED_M_PER_S", "ASTRONAUT_MASS_KG", "SUIT_AND_GEAR_MASS_KG", "METABOLIC_MODEL_AT_MARS_GRAVITY", "EVA_ENERGY_BUDGET_J"],
   // Planner limits (docs/data-contract.md, 4.1) and the waypoint science value it maximizes.
-  science: [...BUDGET, ...OVERLAY_DEPENDS.science],
+  science: [...BUDGET, ...OVERLAY_DEPENDS.science, "SCIENCE_PEAK_COUNT", "SCIENCE_STOP_MIN_SPACING_M"],
 };
 
 // ---- Small helpers ----
@@ -285,7 +289,9 @@ function buildLeft(root: HTMLElement, meta: SiteMeta) {
     <div class="legend-row"><span class="swatch swatch-safe"></span>Safe return, reserve kept</div>
     <div class="legend-row"><span class="swatch swatch-reserve"></span>Return only with the reserve</div>
     <div class="legend-row"><span class="swatch swatch-route"></span>Planned route</div>
-    <div class="legend-row"><span class="swatch swatch-return"></span>Return path from crew</div>`;
+    <div class="legend-row"><span class="swatch swatch-return"></span>Return path from crew</div>
+    <div class="legend-row"><span class="swatch swatch-rescue"></span>Rescue path (buddy injured)</div>
+    <div class="legend-row"><span class="swatch swatch-shelter"></span>Path to shelter (solar alert)</div>`;
   box.append(legend);
   return { rows };
 }
@@ -315,10 +321,10 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
     buttons.append(button);
     return button;
   };
-  const planScience = makeButton("Plan science stops", () => update({ scienceStatus: "requested" }));
+  const planScience = makeButton(AUTO_PLAN_LABEL, () => update({ scienceStatus: "requested" }));
   planScience.classList.add("primary");
   planScience.title =
-    "Picks Curiosity stops from habitat to habitat: each step adds the stop with the most science value per added joule, " +
+    "Picks stops from the Curiosity stops and the science-value peaks, habitat to habitat: each step adds the stop with the most science value per added joule, " +
     "while the plan keeps the energy reserve, the EVA time and the walk radius (docs/data-contract.md, 4.1). " +
     "Replaces your stops; start and end become the habitat.";
   const setStart = makeButton("Set start", () => update({ placing: getState().placing === "start" ? "stop" : "start" }));
@@ -351,7 +357,9 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
 
   // Buddy: B walks the same plan, started later. Same scale as the EVA slider: a delay is a stretch of EVA time.
   const buddyHead = el("div", "slider-head buddy-head");
-  const buddyLabel = el("span", "stat-label", "Buddy B starts later by");
+  // Starts at BUDDY_LAG_S (engine client, on meta.json load).
+  const buddyLabel = withTag(el("span", "stat-label", "Buddy B starts later by"), assumptionTag(meta, ["BUDDY_LAG_S"]));
+  buddyLabel.title = sourceTooltip(meta, "BUDDY_LAG_S");
   const buddyDelay = el("span", "slider-total num", DASH);
   buddyHead.append(buddyLabel, buddyDelay);
   const buddySlider = el("input", "timeline-slider");
@@ -363,6 +371,12 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
   buddySlider.addEventListener("input", () => update({ buddyDelayS: Number(buddySlider.value) }));
   timeline.append(buddyHead, buddySlider);
   const buddyAt = statRow(timeline, "Crew B position", assumptionTag(meta, DEPENDS.timeline));
+  // Shown only after the user dragged B on the map (simulate bPosition).
+  const resetBuddy = el("button", "btn btn-small", "Put B back on the timeline");
+  resetBuddy.type = "button";
+  resetBuddy.title = "B was dragged on the map. B's energy used stays the timeline value.";
+  resetBuddy.addEventListener("click", () => update({ bPosition: null }));
+  timeline.append(resetBuddy);
   const separation = statRow(timeline, "Buddy separation", assumptionTag(meta, DEPENDS.buddy));
   separation.title = sourceTooltip(meta, "BUDDY_MAX_SEPARATION_M");
   // " (limit N m)" after the label text, before the tag. BUDDY_MAX_SEPARATION_M is a setting, so set in renderRight.
@@ -421,22 +435,41 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
   const injuredButton = scenarioButton(
     "buddy_injured",
     "Simulate buddy injured",
-    "Crewmember B is injured at the slider time. A walks to B, then carries B (both masses as load, rescue speed) to the habitat or a rover pickup zone.",
+    "The chosen crewmember is injured at the slider time. The other one walks there, then carries them (both masses as load, rescue speed) to the habitat or a rover pickup zone.",
   );
+  // Who is injured. The other crewmember is the rescuer.
+  const injuredChoice = el("div", "choice");
+  injuredChoice.setAttribute("role", "group");
+  injuredChoice.setAttribute("aria-label", "Injured crewmember");
+  injuredChoice.append(el("span", "choice-label", "Injured:"));
+  const injuredOptions = (["A", "B"] as const).map((id) => {
+    const option = el("button", "btn choice-option", id);
+    option.type = "button";
+    option.title = `Crewmember ${id} is the injured one`;
+    option.addEventListener("click", () => update({ injured: id }));
+    injuredChoice.append(option);
+    return { id, option };
+  });
+  scenarioRow.append(injuredChoice);
   const helmet = el("button", "btn", "Helmet mode");
   helmet.type = "button";
   helmet.title = "High-contrast crew display with quick commands and spoken answers. Esc to leave.";
   helmet.addEventListener("click", () => update({ helmet: true }));
   scenarioRow.append(helmet);
-  const contingencyBody = el("div", "contingency-body");
+  const contingencyBody = el("div", "contingency-body action-card");
   contingencies.append(scenarioRow, contingencyBody);
   const action = statRow(contingencyBody, "Recommended action");
+  const crewRoles = statRow(contingencyBody, "Injured | rescuer");
   const target = statRow(contingencyBody, "Target");
   const actionTime = statRow(contingencyBody, "Time to target");
+  const actionDistance = statRow(contingencyBody, "Distance to target", assumptionTag(meta, DEPENDS.routeTotals));
   const actionEnergy = statRow(contingencyBody, "Energy for the action", assumptionTag(meta, DEPENDS.energy));
   const scenarioTag = el("div", "scenario-tag");
   const contingencyNotes = el("ul", "reasons");
-  contingencyBody.append(scenarioTag, contingencyNotes);
+  // Solar particle alert: walking time of each crewmember to every shelter, and the sourced context.
+  const shelterTable = el("table", "shelter-table");
+  const sepContext = el("div", "sep-context");
+  contingencyBody.append(scenarioTag, shelterTable, sepContext, contingencyNotes);
 
   return {
     meta,
@@ -455,6 +488,7 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
     buddyDelay,
     buddySlider,
     buddyAt,
+    resetBuddy,
     separation,
     separationLimit,
     total,
@@ -475,21 +509,29 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
     reasons,
     sepButton,
     injuredButton,
+    injuredOptions,
     contingencyBody,
     action,
+    crewRoles,
     target,
     actionTime,
+    actionDistance,
     actionEnergy,
     scenarioTag,
+    shelterTable,
+    sepContext,
     contingencyNotes,
   };
 }
 
-function cellLabel(meta: SiteMeta, cell: Cell | null, fallback: string): string {
+// A science peak is known only from the last science plan (SciencePlan.candidates); it is not in meta.json.
+function cellLabel(meta: SiteMeta, cell: Cell | null, fallback: string, plan: SciencePlan | null = null): string {
   if (!cell) return fallback;
   const waypoint = meta.waypoints.find((point) => sameCell(point, cell));
   if (waypoint) return `${waypoint.id} (${waypoint.name})`;
   if (sameCell(meta.habitat, cell)) return "habitat";
+  const peak = plan ? plan.candidates.find((candidate) => candidate.kind === "peak" && sameCell(candidate, cell)) : undefined;
+  if (peak) return `${peak.id} (${PEAK_LABEL})`;
   return `cell ${cell.col},${cell.row}`;
 }
 
@@ -520,7 +562,7 @@ function renderRight(refs: ReturnType<typeof buildRight>, state: MissionState, p
     refs.stopList.replaceChildren();
     state.stops.forEach((stop, index) => {
       const item = el("li", state.selectedStop === index ? "selected" : "");
-      const label = el("button", "stop-label", `${index + 1}. ${cellLabel(meta, stop, "")}`);
+      const label = el("button", "stop-label", `${index + 1}. ${cellLabel(meta, stop, "", state.sciencePlan)}`);
       label.type = "button";
       label.addEventListener("click", () => update({ selectedStop: index }));
       const remove = el("button", "stop-remove", "x");
@@ -560,9 +602,11 @@ function renderRight(refs: ReturnType<typeof buildRight>, state: MissionState, p
     refs.turnBack.textContent = formatClock(turnBackS);
     const mustReturn = isNumber(turnBackS) && state.elapsedS >= turnBackS;
     refs.turnBack.classList.toggle("warn", mustReturn);
-    refs.crewAt.textContent = cellLabel(meta, state.crewCell, DASH);
+    refs.crewAt.textContent = cellLabel(meta, state.crewCell, DASH, state.sciencePlan);
     const buddy = state.sim ? state.sim.astronauts.find((astronaut) => astronaut.id === "B") : undefined;
-    refs.buddyAt.textContent = cellLabel(meta, buddy ? buddy.cell : null, DASH);
+    const buddyText = cellLabel(meta, buddy ? buddy.cell : null, DASH, state.sciencePlan);
+    refs.buddyAt.textContent = state.bPosition ? `${buddyText} (dragged)` : buddyText;
+    refs.resetBuddy.hidden = state.bPosition === null;
     // The engine adds the separation warning line itself (sim.warnings); here the number turns amber too.
     const separationM = state.sim ? state.sim.separationM : null;
     const limitM = paramNumber(state, "BUDDY_MAX_SEPARATION_M");
@@ -602,7 +646,8 @@ function renderRight(refs: ReturnType<typeof buildRight>, state: MissionState, p
   }
 
   if (changed("route") || changed("routeError")) renderRouteSummary(refs, state.route, state.routeError);
-  if (changed("scenario") || changed("contingency") || changed("contingencyError")) renderContingency(refs, state);
+  const contingencyChanged = changed("scenario") || changed("contingency") || changed("contingencyError") || changed("injured");
+  if (contingencyChanged) renderContingency(refs, state);
 }
 
 const ACTION_TEXT: Record<SimState["recommendedAction"], string> = {
@@ -618,31 +663,86 @@ function renderContingency(refs: ReturnType<typeof buildRight>, state: MissionSt
   refs.sepButton.setAttribute("aria-pressed", String(state.scenario === "sep_event"));
   refs.injuredButton.setAttribute("aria-pressed", String(state.scenario === "buddy_injured"));
   refs.contingencyBody.hidden = state.scenario === "none";
+  for (const { id, option } of refs.injuredOptions) {
+    option.classList.toggle("active", state.injured === id);
+    option.setAttribute("aria-pressed", String(state.injured === id));
+  }
   refs.contingencyNotes.replaceChildren();
   refs.scenarioTag.replaceChildren();
+  refs.shelterTable.replaceChildren();
+  refs.sepContext.replaceChildren();
+  document.body.classList.toggle("alert-sep", state.scenario === "sep_event");
 
   const sim = state.contingency;
   if (!sim) {
-    for (const value of [refs.action, refs.target, refs.actionTime, refs.actionEnergy]) value.textContent = DASH;
+    for (const value of [refs.action, refs.crewRoles, refs.target, refs.actionTime, refs.actionDistance, refs.actionEnergy]) value.textContent = DASH;
     if (state.contingencyError) refs.contingencyNotes.append(el("li", "", state.contingencyError));
     return;
   }
 
-  // In "buddy_injured", "return" means A carries B to the habitat.
-  const carrying = sim.scenario === "buddy_injured" && sim.recommendedAction !== "continue";
+  // In "buddy_injured", "return" means the rescuer carries the injured crewmember to the habitat.
+  const injured = sim.astronauts.find((crew) => crew.status === "injured");
+  const rescuer = sim.astronauts.find((crew) => crew.status === "rescuer");
+  const carrying = sim.scenario === "buddy_injured" && sim.recommendedAction !== "continue" && injured && rescuer;
   let actionText = ACTION_TEXT[sim.recommendedAction];
-  if (carrying) actionText = sim.recommendedAction === "return" ? "Carry B to the habitat" : "Carry B to the rover pickup zone";
+  if (carrying) {
+    const where = sim.recommendedAction === "return" ? "the habitat" : "the rover pickup zone";
+    actionText = `${rescuer.id} carries ${injured.id} to ${where}`;
+  }
   refs.action.textContent = actionText;
+  refs.crewRoles.textContent = injured && rescuer ? `${injured.id} | ${rescuer.id}` : DASH;
+  const rolesRow = refs.crewRoles.parentElement;
+  if (rolesRow) rolesRow.hidden = sim.scenario !== "buddy_injured";
   refs.target.textContent = sim.actionTargetId ?? "none reachable";
   const hasPath = sim.actionPath.length > 0;
   refs.actionTime.textContent = hasPath ? formatDuration(sim.actionTimeS) : DASH;
+  refs.actionDistance.textContent = hasPath ? formatDistance(sim.actionDistanceM) : DASH;
   refs.actionEnergy.textContent = hasPath ? formatMJ(sim.actionEnergyJ) : DASH;
 
-  const event = sim.scenario === "sep_event" ? "Solar particle alert" : "Crewmember B injured";
+  const event = sim.scenario === "sep_event" ? "Solar particle alert" : `Crewmember ${injured ? injured.id : DASH} injured`;
   const eventLine = el("span", "", `${event} at EVA time ${formatClock(sim.timeS)}. Map: this event's safe area and path.`);
   const depends = sim.scenario === "sep_event" ? DEPENDS.sepEvent : DEPENDS.rescue;
   refs.scenarioTag.append(withTag(eventLine, assumptionTag(refs.meta, depends)));
-  for (const warning of sim.warnings) refs.contingencyNotes.append(el("li", "", warning));
+  const isSep = sim.scenario === "sep_event";
+  if (isSep) renderShelters(refs, sim);
+  // The SEP_ARRIVAL line is in the sourced context above, so it is not repeated here.
+  const warnings = isSep ? sim.warnings.filter((line) => !line.includes("SEP_ARRIVAL")) : sim.warnings;
+  for (const warning of warnings) refs.contingencyNotes.append(el("li", "", warning));
+}
+
+// One row per shelter: kind, walking time of A and B. The chosen full shelter is marked. Only sourced radiation
+// context below: no dose rate is invented (docs/assumptions.md, "Radiation").
+function renderShelters(refs: ReturnType<typeof buildRight>, sim: SimState): void {
+  const meta = refs.meta;
+  const head = el("tr");
+  for (const title of ["Shelter", "Crew A", "Crew B"]) head.append(el("th", "", title));
+  refs.shelterTable.append(head);
+  for (const option of sim.shelters) {
+    const row = el("tr", option.shelterId === sim.actionTargetId ? "chosen" : "");
+    const name = el("td");
+    if (option.kind === "full") {
+      name.append(withTag(el("span", "", `${option.shelterId} (full)`), assumptionTag(meta, ["FULL_SHELTERS"])));
+    } else {
+      const openSky = option.openSkyShare === null ? "" : `, open sky ${Math.round(option.openSkyShare * 100)}%`;
+      name.append(withTag(el("span", "", `Terrain: partial shielding only${openSky}`), assumptionTag(meta, DEPENDS.partialShelter)));
+    }
+    row.append(name, el("td", "num", formatDuration(option.timeS.A)), el("td", "num", formatDuration(option.timeS.B)));
+    refs.shelterTable.append(row);
+  }
+
+  const dose = meta.constants.SEP_MAY2024_TOTAL_UGY;
+  const arrival = meta.constants.SEP_ARRIVAL;
+  if (dose) {
+    const doseUgy = Number(dose.value).toLocaleString("en-US");
+    const line = el("div", "", `May 2024 event, total dose beside Curiosity: ${doseUgy} uGy (no shelter)`);
+    line.title = sourceTooltip(meta, "SEP_MAY2024_TOTAL_UGY");
+    refs.sepContext.append(line);
+  }
+  if (arrival) {
+    const line = el("div", "", `Particles can arrive within ${arrival.value}`);
+    line.title = sourceTooltip(meta, "SEP_ARRIVAL");
+    refs.sepContext.append(line);
+  }
 }
 
 // The selected stop, when it is a Curiosity stop: its image from that stop (meta.json waypoint pov) and where it comes from.
@@ -672,7 +772,7 @@ function renderScience(refs: ReturnType<typeof buildRight>, state: MissionState)
   const engineUsable = state.engine.status === "ready" || state.engine.status === "calculating";
   const busy = state.scienceStatus !== "idle";
   refs.planScience.disabled = busy || !engineUsable;
-  refs.planScience.textContent = busy ? "Planning science stops..." : "Plan science stops";
+  refs.planScience.textContent = busy ? "Planning stops..." : AUTO_PLAN_LABEL;
 
   refs.scienceNote.replaceChildren();
   if (state.scienceError) {
@@ -683,10 +783,12 @@ function renderScience(refs: ReturnType<typeof buildRight>, state: MissionState)
   const planIsShown = plan !== null && state.stops === plan.stops;
   if (!planIsShown) return;
   if (plan.stopIds.length === 0) {
-    refs.scienceNote.append("No Curiosity stop fits the energy reserve, EVA time and walk radius.");
+    refs.scienceNote.append("No stop fits the energy reserve, EVA time and walk radius.");
     return;
   }
-  const text = el("span", "", `Science plan: ${plan.stopIds.join(", ")}. Total science value ${plan.totalValue}.`);
+  const peakCount = plan.stopIds.filter((id) => plan.candidates.some((candidate) => candidate.id === id && candidate.kind === "peak")).length;
+  const peaks = peakCount > 0 ? ` ${peakCount} of them are science peaks (no Curiosity image).` : "";
+  const text = el("span", "", `Science plan: ${plan.stopIds.join(", ")}. Total science value ${plan.totalValue}.${peaks}`);
   refs.scienceNote.append(withTag(text, assumptionTag(refs.meta, DEPENDS.science)));
 }
 
@@ -792,7 +894,7 @@ function energyPoints(route: Route): EnergyPoint[] {
 // Distance along the route of the crew cell from the simulate reply.
 // A route can pass the same cell twice (out and back). The leg the crew is on follows from the leg times plus the
 // dwell at each stop (engine values), and the match inside that leg's distance range is taken.
-function crewDistanceM(route: Route, crewCell: Cell | null, elapsedS: number): number | null {
+export function crewDistanceM(route: Route, crewCell: Cell | null, elapsedS: number): number | null {
   if (!crewCell || route.path.length === 0) return null;
   const matches: number[] = [];
   route.path.forEach((cell, i) => {

@@ -86,6 +86,17 @@ export const SANTEE_MIN_LEVEL_FRACTION = 0.5;
 // Using the design-average rate as a whole-EVA energy budget is our choice. Adjustable with setParams.
 export const EVA_ENERGY_BUDGET_J = EVA_DURATION_H * AVG_METABOLIC_KJ_PER_H * 1000;
 
+// ASSUMPTION: science planner candidates = meta.json waypoints + at most this many science-value peaks
+// (docs/data-contract.md, section 4.1).
+export const SCIENCE_PEAK_COUNT = 10;
+
+// ASSUMPTION: minimum straight-line distance between science stops, and from the habitat. Also used by the pipeline
+// for the meta.json waypoints; the engine uses it to space the science peaks.
+export const SCIENCE_STOP_MIN_SPACING_M = 150;
+
+// ASSUMPTION: a heading change above this starts a new turn-by-turn instruction (docs/data-contract.md, section 4.2).
+export const TURN_ANGLE_DEG = 30;
+
 // ASSUMPTION: a diagonal move needs both side neighbours passable, so a route cannot slip through an impassable band.
 export const NO_CORNER_CUTTING = true;
 
@@ -95,6 +106,10 @@ export const FULL_SHELTERS = ["habitat", "rover"];
 // ASSUMPTION: warn when the crew needs longer than this to reach a full shelter in a solar particle event.
 // Lower end of the 30 to 60 min particle onset after the 2013-2014 flares (docs/research.md, section 2.6). Adjustable.
 export const SEP_SHELTER_TARGET_MIN = 30;
+
+// ASSUMPTION: a cell is a terrain partial shelter when its open-sky share (shield.bin / 255) is at or below this.
+// 0.90 keeps the most sheltered 0.65% of the walkable cells of the real site. Gives no dose reduction number.
+export const SHIELD_PARTIAL_MAX_SKY = 0.9;
 
 // DEFINITION: unit conversions (docs/assumptions.md, "Units").
 export const SECONDS_PER_HOUR = 3600;

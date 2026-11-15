@@ -47,7 +47,12 @@ export type MissionState = {
   // Timeline (EVA time slider). The engine fills envelope, usedJ, crewCell and sim from a simulate("none") reply.
   elapsedS: number;
   // Astronaut B walks the same plan this many seconds behind A (simulate delaysS.B). 0 = together.
+  // Starts at BUDDY_LAG_S (docs/assumptions.md) when meta.json loads.
   buddyDelayS: number;
+  // The user dragged B on the map: B stands here instead of on the timeline (simulate bPosition). null = timeline.
+  bPosition: Cell | null;
+  // Who is injured in "buddy_injured" (simulate injured). The other crewmember is the rescuer.
+  injured: "A" | "B";
   usedJ: number | null;
   crewCell: Cell | null;
   envelope: Envelope | null;
@@ -95,6 +100,8 @@ function initialState(): MissionState {
     scienceError: null,
     elapsedS: 0,
     buddyDelayS: 0,
+    bPosition: null,
+    injured: "B",
     usedJ: null,
     crewCell: null,
     envelope: null,

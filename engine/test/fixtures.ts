@@ -167,6 +167,15 @@ export function makeFixtureSite(options: FixtureOptions = {}): SiteFiles {
 
   const cost = terrainCostFromSlope(elevation, width, height, options.steepPassable ?? false);
   const shield = new Uint8Array(count).fill(255);
+  // Two sheltered patches on the south plain (open sky 200 / 255 = 0.78), for the terrain partial shelter rule:
+  // a near one west of the habitat and a far one in the south-east corner.
+  const shelterPatch = (colShare: number, rowShare: number) => {
+    const col0 = Math.round(colShare * size);
+    const row0 = Math.round(rowShare * size);
+    for (let row = row0; row < row0 + 2; row++) for (let col = col0; col < col0 + 2; col++) shield[row * width + col] = 200;
+  };
+  shelterPatch(0.4, 0.85);
+  shelterPatch(0.6, 0.95);
   const quality = new Uint8Array(count);
   for (let row = 0; row < height; row++) {
     for (let col = width - 5; col < width; col++) quality[row * width + col] = 1;

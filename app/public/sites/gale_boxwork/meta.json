@@ -1,5 +1,5 @@
 {
-  "version": 9,
+  "version": 10,
   "site": "gale_boxwork",
   "name": "Mount Sharp boxwork, Gale Crater",
   "width": 1000,
@@ -414,6 +414,11 @@
       "status": "ASSUMPTION",
       "source": "No Mars rule published. Adjustable."
     },
+    "BUDDY_LAG_S": {
+      "value": "120",
+      "status": "ASSUMPTION",
+      "source": "Default time crewmember B walks behind A on the same path (simulate delaysS.B, the app's buddy slider starts here). No published value. Adjustable in the app. (project owner, 2026-11-15)"
+    },
     "CAUTION_SLOPE_PENALTY": {
       "value": "1.5",
       "status": "ASSUMPTION",
@@ -518,6 +523,11 @@
       "value": "habitat, rover",
       "status": "ASSUMPTION",
       "source": "Terrain is partial shielding only"
+    },
+    "SHIELD_PARTIAL_MAX_SKY": {
+      "value": "0.90",
+      "status": "ASSUMPTION",
+      "source": "A cell counts as a terrain partial shelter when its open-sky share (shield.bin / 255) is at or below this. On the real site the walkable cells run from 0.906 (1st percentile) to 1.0; 0.90 keeps 4,945 cells (0.65%), the most sheltered ones under ridges and walls. Gives no dose reduction number. (project owner, 2026-11-15)"
     },
     "ROUGHNESS_DETREND_SIGMA_M": {
       "value": "2.0",
@@ -678,6 +688,16 @@
       "value": "remaining energy spent at STATION_WORK_W while the crew stays at `position`",
       "status": "ASSUMPTION",
       "source": "Formula below"
+    },
+    "TURN_ANGLE_DEG": {
+      "value": "30",
+      "status": "ASSUMPTION",
+      "source": "A heading change above this starts a new turn-by-turn instruction (docs/data-contract.md, section 4.2). Smaller changes follow the terrain without a new step. (project owner, 2026-11-15)"
+    },
+    "SCIENCE_PEAK_COUNT": {
+      "value": "10",
+      "status": "ASSUMPTION",
+      "source": "Science planner: at most this many science-value peaks (local maxima of science_val.bin) join the Curiosity stops as candidates, at least SCIENCE_STOP_MIN_SPACING_M apart (docs/data-contract.md, section 4.1). Peaks have no Curiosity image. (project owner, 2026-11-15)"
     },
     "SECONDS_PER_HOUR": {
       "value": "3600",

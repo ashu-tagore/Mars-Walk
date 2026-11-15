@@ -1,4 +1,4 @@
-"""Checks the files prepare.py wrote against docs/data-contract.md (version 9).
+"""Checks the files prepare.py wrote against docs/data-contract.md (version 10).
 
 Run prepare.py first. The tests skip when the site has not been built.
 """
@@ -39,7 +39,7 @@ def test_meta_has_contract_keys(meta):
                 "rowOrder", "noData", "layers", "tiles", "overlays", "habitat", "shelters", "roverPickupZones",
                 "waypoints", "sources", "notes", "constants"]
     assert [key for key in required if key not in meta] == []
-    assert meta["version"] == 9
+    assert meta["version"] == 10
     assert meta["byteOrder"] == "little" and meta["rowOrder"] == "north_to_south"
     assert set(meta["layers"]) == {"elevation", "terrainCost", "shield", "scienceValue", "demQuality"}
 

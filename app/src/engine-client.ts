@@ -11,7 +11,7 @@
 
 import type { Envelope, Route, ShelterTimes } from "../../engine/src/engine";
 import { CONTRACT_VERSION } from "../../engine/src/grid";
-import type { SciencePlan, SimState } from "../../engine/src/mission";
+import type { SciencePlan, SimRequest, SimState } from "../../engine/src/mission";
 import { type MissionState, type SiteMeta, constantNumber, getState, subscribe, update } from "./store";
 
 // docs/data-contract.md, sections 3 and 4. Built from the engine's own types. worker.ts is not imported here:
@@ -82,7 +82,8 @@ export async function openSite(siteUrl: string): Promise<void> {
 
   const layers = { ...getState().layers };
   for (const overlay of meta.overlays) layers[overlay.id] = false;
-  update({ meta, layers });
+  const buddyDelayS = constantNumber(meta, "BUDDY_LAG_S") ?? 0;
+  update({ meta, layers, buddyDelayS });
 
   worker = new Worker(new URL("../../engine/src/worker.ts", import.meta.url), { type: "module" });
   worker.addEventListener("message", (event: MessageEvent<EngineReply>) => onReply(event.data));
@@ -112,12 +113,14 @@ function onStoreChange(state: MissionState, previous: MissionState): void {
     requestTimeline();
     return;
   }
-  const timelineChanged = state.elapsedS !== previous.elapsedS || state.buddyDelayS !== previous.buddyDelayS;
+  const timelineChanged =
+    state.elapsedS !== previous.elapsedS || state.buddyDelayS !== previous.buddyDelayS || state.bPosition !== previous.bPosition;
   if (timelineChanged) {
     requestTimeline();
     return;
   }
-  if (state.scenario !== previous.scenario) requestContingency();
+  const contingencyChanged = state.scenario !== previous.scenario || state.injured !== previous.injured;
+  if (contingencyChanged) requestContingency();
 }
 
 // The plan in contract form. A missing start or end is the habitat (docs/data-contract.md, planRoute).
@@ -141,8 +144,8 @@ function requestTimeline(): void {
   requestContingency();
 }
 
-// The event happens at the slider time. Astronaut A is the display crewmember: in "buddy_injured" A is the rescuer
-// and B is injured (docs/data-contract.md, section 4.1).
+// The event happens at the slider time. Astronaut A is the display crewmember. In "buddy_injured" `injured` picks the
+// injured crewmember and the engine gives the rescuer's action (docs/data-contract.md, section 4.1).
 function requestContingency(): void {
   const state = getState();
   if (state.scenario === "none") {
@@ -154,7 +157,10 @@ function requestContingency(): void {
 
 function simulatePayload(state: MissionState, scenario: MissionState["scenario"]) {
   const delaysS = { A: 0, B: state.buddyDelayS };
-  return { scenario, atTimeS: state.elapsedS, astronaut: "A", delaysS, ...planPayload(state) };
+  const payload: SimRequest = { scenario, atTimeS: state.elapsedS, astronaut: "A", delaysS, ...planPayload(state) };
+  if (scenario === "buddy_injured") payload.injured = state.injured;
+  if (state.bPosition) payload.bPosition = state.bPosition;
+  return payload;
 }
 
 // setParams changes only the names it is given (engine applyParams). Each message carries every name the user ever

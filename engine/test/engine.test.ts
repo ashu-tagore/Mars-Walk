@@ -375,8 +375,7 @@ describe("grid loading and worker", () => {
     const grid = await loadSite("sites/fixture", fakeFetch);
     expect(grid.width).toBe(50);
     expect(grid.elevation.length).toBe(2500);
-    // REVIEW.md F-13: shield.bin and science_val.bin are not read by the engine, so they are not fetched.
-    expect(requested).toEqual(["meta.json", "elevation.bin", "terrain_cost.bin", "dem_quality.bin"]);
+    expect(requested).toEqual(["meta.json", "elevation.bin", "terrain_cost.bin", "dem_quality.bin", "shield.bin", "science_val.bin"]);
   });
 
   it("worker replies with contract types and errors", async () => {
@@ -455,4 +454,60 @@ describe.skipIf(!hasRealSite)("real site (gale_boxwork pipeline output)", () => 
     const unreachable = points.filter((point) => fromHabitat.energyJ[cellIndex(grid, point)] === Infinity).map((point) => point.id);
     expect(unreachable).toEqual([]);
   }, 60_000);
+});
+
+describe("route instructions (docs/data-contract.md, section 4.2)", () => {
+  const SIZE = 20;
+  // Flat tiny grid, habitat at (0, 0). `slopeDeg` tilts it up toward the east.
+  function tinyGrid(slopeDeg = 0): Grid {
+    const elevations: number[] = [];
+    for (let row = 0; row < SIZE; row++) for (let col = 0; col < SIZE; col++) elevations.push(col * CELL_M * Math.tan(slopeDeg * DEG));
+    const site = makeTinySite(SIZE, SIZE, elevations);
+    return parseSite(site.meta, site.files);
+  }
+
+  it("a straight path gives one instruction", () => {
+    const grid = tinyGrid();
+    const route = planRoute(grid, defaultParams(), { start: { col: 0, row: 0 }, end: { col: 15, row: 0 }, stops: [] });
+    expect(route.instructions).toHaveLength(1);
+    const [step] = route.instructions;
+    expect(step.direction).toBe("E");
+    expect(step.cellIndex).toBe(0);
+    expect(step.distanceM).toBeCloseTo(15 * CELL_M, 9);
+    expect(step.text).toBe("Head E for 45 m to 15,0");
+    expect(step.warning).toBeUndefined();
+  });
+
+  it("a straight diagonal path gives one instruction", () => {
+    const grid = tinyGrid();
+    const route = planRoute(grid, defaultParams(), { start: { col: 0, row: 0 }, end: { col: 12, row: 12 }, stops: [] });
+    expect(route.instructions.map((step) => step.direction)).toEqual(["SE"]);
+  });
+
+  it("a stop ends a step, and a turn starts a new one with its own compass direction", () => {
+    const grid = tinyGrid();
+    const route = planRoute(grid, defaultParams(), { start: { col: 0, row: 0 }, end: { col: 10, row: 10 }, stops: [{ col: 10, row: 0 }] });
+    expect(route.instructions.map((step) => step.direction)).toEqual(["E", "S"]);
+    expect(route.instructions[1].cellIndex).toBe(10);
+    expect(route.instructions[0].text).toContain("to 10,0");
+    const totalM = route.instructions.reduce((sum, step) => sum + step.distanceM, 0);
+    expect(totalM).toBeCloseTo(route.legs.reduce((sum, leg) => sum + leg.distanceM, 0), 9);
+  });
+
+  it("warns on a step with a caution slope, not on a flat one", () => {
+    const params = defaultParams();
+    const steep = planRoute(tinyGrid(17), params, { start: { col: 0, row: 5 }, end: { col: 12, row: 5 }, stops: [] });
+    expect(steep.instructions.length).toBeGreaterThan(0);
+    expect(steep.instructions.some((step) => step.warning === `Caution slope (${params.CAUTION_SLOPE_DEG}-${params.MAX_SLOPE_DEG} deg)`)).toBe(true);
+    const flat = planRoute(tinyGrid(), params, { start: { col: 0, row: 5 }, end: { col: 12, row: 5 }, stops: [] });
+    expect(flat.instructions.every((step) => step.warning === undefined)).toBe(true);
+  });
+
+  it("a route with no path has no instructions", () => {
+    const site = makeTinySite(3, 1, [0, 0, 0], [10, 255, 10]);
+    const grid = parseSite(site.meta, site.files);
+    const route = planRoute(grid, defaultParams(), { end: { col: 2, row: 0 }, stops: [] });
+    expect(route.verdict).toBe("NO_GO");
+    expect(route.instructions).toEqual([]);
+  });
 });

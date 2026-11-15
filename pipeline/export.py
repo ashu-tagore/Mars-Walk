@@ -1,4 +1,4 @@
-"""Write the pipeline output in the format of docs/data-contract.md (version 9).
+"""Write the pipeline output in the format of docs/data-contract.md (version 10).
 
 .bin layers, meta.json, orthophoto tile pyramid and display overlays.
 """
@@ -15,7 +15,7 @@ from PIL import Image
 
 from constants import CAUTION_SLOPE_DEG, DEM_EAST_STRIP_M, MAX_SLOPE_DEG, ROUTING_CELL_SIZE_M, TILE_JPEG_QUALITY
 
-CONTRACT_VERSION = 9
+CONTRACT_VERSION = 10
 NO_DATA_FLOAT = -9999.0
 TILE_SIZE = 256
 THEMIS_MANIFEST_KEY = "data/raw/themis_day_aoi.tif"

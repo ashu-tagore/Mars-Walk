@@ -34,6 +34,7 @@ Each SOURCED value was checked against docs/research.md on 2026-11-14. Changes a
 | STATION_WORK_W | 280 | SOURCED | Apollo geological station activity, 244 kcal/h = 284 W (Moore, NTRS 19910001262, p. 2, citing Waligora and Horrigan 1975) |
 | RESERVE_FRACTION | 0.20 | ASSUMPTION | Safety margin kept unused on return. Adjustable. |
 | BUDDY_MAX_SEPARATION_M | 100 | ASSUMPTION | No Mars rule published. Adjustable. |
+| BUDDY_LAG_S | 120 | ASSUMPTION | Default time crewmember B walks behind A on the same path (simulate delaysS.B, the app's buddy slider starts here). No published value. Adjustable in the app. (project owner, 2026-11-15) |
 | CAUTION_SLOPE_PENALTY | 1.5 | ASSUMPTION | Extra cost multiplier for 15-20 deg cells |
 
 ## Body and load
@@ -87,6 +88,7 @@ W_total = max(W_level + W_slope, W_level * 0.5)
 | SEP_SHELTER_TARGET_MIN | 30 | ASSUMPTION | Warn when the crew needs longer than this to reach a full shelter. 30 min = the lower end of the 30 to 60 min particle onset after the 2013-2014 flares (docs/research.md, section 2.6). SEP_ARRIVAL gives no exact number. Adjustable. (project owner, 2026-11-14) |
 | TERRAIN_SHIELD_MODEL | zenith-weighted sky view | ASSUMPTION | Low-angle particles cross more atmosphere, so overhead sky matters most |
 | FULL_SHELTERS | habitat, rover | ASSUMPTION | Terrain is partial shielding only |
+| SHIELD_PARTIAL_MAX_SKY | 0.90 | ASSUMPTION | A cell counts as a terrain partial shelter when its open-sky share (shield.bin / 255) is at or below this. On the real site the walkable cells run from 0.906 (1st percentile) to 1.0; 0.90 keeps 4,945 cells (0.65%), the most sheltered ones under ridges and walls. Gives no dose reduction number. (project owner, 2026-11-15) |
 
 ## Data limits (show in the UI "About the data" panel)
 
@@ -195,6 +197,8 @@ Values in engine/src/constants.ts.
 | Name | Value | Status | Source / reason |
 |---|---|---|---|
 | TURN_BACK_MODEL | remaining energy spent at STATION_WORK_W while the crew stays at `position` | ASSUMPTION | Formula below |
+| TURN_ANGLE_DEG | 30 | ASSUMPTION | A heading change above this starts a new turn-by-turn instruction (docs/data-contract.md, section 4.2). Smaller changes follow the terrain without a new step. (project owner, 2026-11-15) |
+| SCIENCE_PEAK_COUNT | 10 | ASSUMPTION | Science planner: at most this many science-value peaks (local maxima of science_val.bin) join the Curiosity stops as candidates, at least SCIENCE_STOP_MIN_SPACING_M apart (docs/data-contract.md, section 4.1). Peaks have no Curiosity image. (project owner, 2026-11-15) |
 
 - Turn-back time (ASSUMPTION: remaining energy is spent at STATION_WORK_W while the crew stays at `position`):
   energySlack = EVA_ENERGY_BUDGET_J * (1 - RESERVE_FRACTION) - usedJ - returnJ(position);

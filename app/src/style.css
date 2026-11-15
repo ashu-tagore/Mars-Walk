@@ -13,6 +13,8 @@
   --cyan: #2fd4f0;
   --cyan-soft: rgba(47, 212, 240, 0.16);
   --amber: #ffb020;
+  --orange: #ff7a1a;
+  --violet: #e6a8ff;
   --green: #2ecc71;
   --red: #ff5d5d;
   --tag: #6a7a94;
@@ -480,6 +482,37 @@ button {
   margin-top: 10px;
 }
 
+/* The recommended action of a contingency, set apart from the plan numbers. */
+.action-card {
+  padding: 8px 10px;
+  border: 1px solid var(--orange);
+  border-left-width: 4px;
+  border-radius: 4px;
+  background: var(--panel-raised);
+}
+
+.btn-small {
+  margin-top: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+
+/* Injured crewmember choice: two small toggle buttons. */
+.choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.choice-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.choice-option {
+  min-width: 32px;
+}
+
 .scenario-tag {
   margin-top: 8px;
   font-size: 13px;
@@ -620,6 +653,16 @@ button {
 .swatch-return {
   height: 0;
   border-top: 2px dashed var(--amber);
+}
+
+.swatch-rescue {
+  height: 0;
+  border-top: 3px dotted var(--orange);
+}
+
+.swatch-shelter {
+  height: 0;
+  border-top: 4px solid var(--orange);
 }
 
 /* ---- Timeline and energy ---- */
@@ -775,6 +818,11 @@ button {
   stroke-opacity: 0.9;
 }
 
+.rescue-path {
+  stroke: var(--orange);
+  stroke-opacity: 1;
+}
+
 .map-marker {
   display: flex;
   align-items: center;
@@ -798,6 +846,14 @@ button {
   background: var(--green);
   color: var(--bg);
   border-radius: 4px;
+}
+
+/* Science peak: a planner candidate without a Curiosity image. Dashed, so it reads apart from the Curiosity stops. */
+.marker-peak {
+  background: var(--bg);
+  color: var(--violet);
+  border: 2px dashed var(--violet);
+  font-size: 10px;
 }
 
 .marker-shelter-partial {
@@ -856,6 +912,20 @@ button {
 
 .marker-crew-b {
   background: var(--cyan);
+}
+
+.marker-crew-b {
+  cursor: grab;
+}
+
+/* Buddy injured: the injured crewmember is red, the rescuer orange (classes set from the simulate reply). */
+.map-marker.marker-injured {
+  background: var(--red);
+  border-style: dashed;
+}
+
+.map-marker.marker-rescuer {
+  background: var(--orange);
 }
 
 .map-tooltip {
@@ -1057,11 +1127,24 @@ button {
   color: #ffd400;
 }
 
-.helmet-exit,
-.helmet-command {
+.helmet-exit {
   min-height: 48px;
   padding: 8px 16px;
   font-size: 18px;
+  color: #fff;
+  background: #000;
+  border: 2px solid #fff;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+/* Quick commands: large targets for gloved hands. */
+.helmet-command {
+  min-height: 72px;
+  min-width: 160px;
+  padding: 10px 20px;
+  font-size: 22px;
+  font-weight: 700;
   color: #fff;
   background: #000;
   border: 2px solid #fff;
@@ -1077,6 +1160,63 @@ button {
   background: #ffd400;
   border-color: #ffd400;
   outline: none;
+}
+
+/* Main block: the big arrow and the current step, readable at arm's length. */
+.helmet-main {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 16px 20px;
+  border: 3px solid #fff;
+  border-radius: 8px;
+}
+
+.helmet-main[data-mode="action"] {
+  border-color: #ff7a1a;
+  background: #2a1200;
+}
+
+.helmet-arrow {
+  flex: none;
+  width: 160px;
+  height: 160px;
+  color: #ffd400;
+  transition: transform 0.3s ease;
+}
+
+.helmet-arrow svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.helmet-main-text {
+  min-width: 0;
+}
+
+.helmet-headline {
+  font-size: 64px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.helmet-main[data-mode="action"] .helmet-headline {
+  font-size: 48px;
+  color: #ff7a1a;
+}
+
+.helmet-detail {
+  margin-top: 8px;
+  font-size: 26px;
+  color: #ddd;
+}
+
+.helmet-warning {
+  margin-top: 8px;
+  font-size: 26px;
+  font-weight: 700;
+  color: #ffd400;
 }
 
 .helmet-body {
@@ -1107,7 +1247,20 @@ button {
 }
 
 .helmet-value {
-  line-height: 1.35;
+  font-size: 36px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.helmet-tile.urgent {
+  border-color: #ffd400;
+  background: #332b00;
+}
+
+.helmet-tile.alert {
+  border-color: #ff7a1a;
+  background: #2a1200;
+  color: #ff7a1a;
 }
 
 .helmet-pov {
@@ -1155,6 +1308,24 @@ button {
   outline: none;
 }
 
+.helmet-voice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+
+.helmet-mic.active {
+  color: #000;
+  background: #ff7a1a;
+  border-color: #ff7a1a;
+}
+
+.helmet-note {
+  font-size: 16px;
+  color: #ccc;
+}
+
 .helmet-answer {
   min-height: 1.4em;
   font-size: 24px;
@@ -1166,7 +1337,80 @@ button {
     flex-direction: column;
   }
 
+  .helmet-main {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .helmet-arrow {
+    width: 96px;
+    height: 96px;
+  }
+
+  .helmet-headline {
+    font-size: 44px;
+  }
+
   .helmet-pov {
     width: 100%;
   }
+}
+/* ---- Solar particle alert ---- */
+
+.alert-banner {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  max-width: calc(100% - 120px);
+  padding: 8px 18px;
+  background: var(--orange);
+  color: var(--bg);
+  font-size: 18px;
+  font-weight: 700;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+
+/* The whole UI turns to the alert state: orange header line. */
+body.alert-sep .app-header {
+  box-shadow: inset 0 -3px 0 var(--orange);
+}
+
+.shelter-path {
+  stroke: var(--orange);
+  stroke-opacity: 1;
+  filter: drop-shadow(0 0 4px var(--orange));
+}
+
+.shelter-table {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.shelter-table th,
+.shelter-table td {
+  padding: 3px 4px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+
+.shelter-table th {
+  color: var(--muted);
+  font-weight: 400;
+}
+
+.shelter-table tr.chosen td {
+  color: var(--orange);
+  font-weight: 700;
+}
+
+.sep-context {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--muted);
 }
