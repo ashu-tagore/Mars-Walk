@@ -210,10 +210,66 @@ function horizontalM(grid: Grid, from: number, to: number): number {
   return isDiagonal ? grid.cellSizeM * Math.SQRT2 : grid.cellSizeM;
 }
 
-// Energy (J) to walk from cell `from` to its neighbour `to`. Infinity = impassable.
+// ---- Edge energy cache ----
+// The planner runs one search per candidate and the simulator a full walk-back per request, all over the same grid and
+// move. Each edge needs atan, cos, sin and a power, so each edge energy is computed once per grid and move and then
+// read back. Values are computed by computeEdgeEnergyJ either way, so every result is bit-identical with or without it.
+// One Float64 per edge: 8 * 1000 * 1000 * 8 bytes = 64 MB per move on the real site. Only the two newest moves are
+// kept (walking and rescue); a setParams change makes a new move and drops the oldest cache.
+const MAX_CACHED_MOVES = 2;
+const edgeCaches = new WeakMap<Grid, Map<string, Float64Array>>();
+
+// Neighbour slot k (DCOL / DROW order) from the row and column offset: index (dRow + 1) * 3 + (dCol + 1). -1 = not a neighbour.
+const NEIGHBOUR_SLOT = [7, 0, 1, 6, -1, 2, 5, 4, 3];
+
+// A search passes the same grid and move object for millions of edges: remember the last lookup by identity.
+let lastLookup: { grid: Grid; move: MoveParams; cache: Float64Array } | null = null;
+
+function edgeCache(grid: Grid, move: MoveParams): Float64Array {
+  if (lastLookup && lastLookup.grid === grid && lastLookup.move === move) return lastLookup.cache;
+  const cache = findOrCreateCache(grid, move);
+  lastLookup = { grid, move, cache };
+  return cache;
+}
+
+function findOrCreateCache(grid: Grid, move: MoveParams): Float64Array {
+  let caches = edgeCaches.get(grid);
+  if (!caches) {
+    caches = new Map();
+    edgeCaches.set(grid, caches);
+  }
+  const key = `${move.massKg}|${move.speedMPerS}|${move.maxSlopeDeg}`;
+  let cache = caches.get(key);
+  if (cache) return cache;
+  if (caches.size >= MAX_CACHED_MOVES) caches.delete(caches.keys().next().value as string);
+  // NaN = not computed yet (an edge energy is never NaN: it is a number or Infinity).
+  cache = new Float64Array(grid.width * grid.height * 8).fill(NaN);
+  caches.set(key, cache);
+  return cache;
+}
+
+// Energy (J) to walk from cell `from` to its neighbour `to`. Infinity = impassable. Cached per grid and move.
+export function edgeEnergyJ(grid: Grid, from: number, to: number, move: MoveParams): number {
+  const width = grid.width;
+  const fromCol = from % width;
+  const toCol = to % width;
+  const dCol = toCol - fromCol;
+  const dRow = (to - toCol) / width - (from - fromCol) / width;
+  const isNeighbour = Math.abs(dCol) <= 1 && Math.abs(dRow) <= 1 && (dCol !== 0 || dRow !== 0);
+  if (!isNeighbour) return computeEdgeEnergyJ(grid, from, to, move);
+
+  const cache = edgeCache(grid, move);
+  const slot = from * 8 + NEIGHBOUR_SLOT[(dRow + 1) * 3 + (dCol + 1)];
+  const cached = cache[slot];
+  if (!Number.isNaN(cached)) return cached;
+  const energyJ = computeEdgeEnergyJ(grid, from, to, move);
+  cache[slot] = energyJ;
+  return energyJ;
+}
+
 // The terrain multiplier of the destination cell already holds caution, roughness and boulder factors.
 // Both ends must be passable: an impassable cell is never on a route, not even as the first cell (CLAUDE.md, hard rules).
-export function edgeEnergyJ(grid: Grid, from: number, to: number, move: MoveParams): number {
+function computeEdgeEnergyJ(grid: Grid, from: number, to: number, move: MoveParams): number {
   const costByte = grid.terrainCost[to];
   const endBlocked = costByte === grid.impassable || grid.terrainCost[from] === grid.impassable;
   if (endBlocked) return Infinity;
@@ -249,6 +305,14 @@ export function edgeEnergyJ(grid: Grid, from: number, to: number, move: MovePara
 // Distance walked on the ground (not the map distance) between two neighbours.
 export function edgeSurfaceM(grid: Grid, from: number, to: number): number {
   const runM = horizontalM(grid, from, to);
+  const riseM = grid.elevation[to] - grid.elevation[from];
+  return Math.sqrt(runM * runM + riseM * riseM);
+}
+
+// Same value as edgeSurfaceM for the neighbour in slot k (DCOL / DROW order: odd slots are diagonal), without working
+// out from the indices whether the step is diagonal. Used inside the search loops. Symmetric: u -> v equals v -> u.
+function slotSurfaceM(grid: Grid, from: number, to: number, k: number): number {
+  const runM = k % 2 === 1 ? grid.cellSizeM * Math.SQRT2 : grid.cellSizeM;
   const riseM = grid.elevation[to] - grid.elevation[from];
   return Math.sqrt(runM * runM + riseM * riseM);
 }
@@ -396,7 +460,7 @@ export function astar(grid: Grid, start: number, goal: number, move: MoveParams)
       if (candidate >= energy[v]) continue;
 
       energy[v] = candidate;
-      time[v] = time[u] + edgeTimeS(grid, u, v, move);
+      time[v] = time[u] + slotSurfaceM(grid, u, v, k) / move.speedMPerS;
       cameFrom[v] = u;
       fScore[v] = candidate + straightLineM(grid, v, goal) * perMeterJ;
       heapPushOrDecrease(heap, v);
@@ -457,9 +521,11 @@ export function dijkstra(grid: Grid, source: number, move: MoveParams, reversed:
       const candidate = energy[u] + cost;
       if (candidate >= energy[v]) continue;
 
+      // Surface length is the same both ways, so one value serves the reversed search too.
+      const surfaceM = slotSurfaceM(grid, u, v, k);
       energy[v] = candidate;
-      time[v] = time[u] + (reversed ? edgeTimeS(grid, v, u, move) : edgeTimeS(grid, u, v, move));
-      distance[v] = distance[u] + edgeSurfaceM(grid, u, v);
+      time[v] = time[u] + surfaceM / move.speedMPerS;
+      distance[v] = distance[u] + surfaceM;
       cameFrom[v] = u;
       heapPushOrDecrease(heap, v);
     }

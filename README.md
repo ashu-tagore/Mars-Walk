@@ -12,7 +12,7 @@ and what to do if a solar storm starts or one of them is injured. Everything run
 |---|---|
 | `/pipeline` (Python) | Built. Turns real NASA data into a 3 m routing grid, map tiles and layers. |
 | `/engine` (TypeScript, Web Worker) | Built. Directional energy routing, walk-back area, shelter times, science planner, contingency simulator. |
-| `/app` (TypeScript, Vite, Leaflet) | Core built (Phase 3): map with orthophoto and data layers, stops, route, walk-back area with EVA time slider, energy budget, route profile. Works offline after the first load. Contingency simulator, helmet mode and voice come next (Phase 4). |
+| `/app` (TypeScript, Vite, Leaflet) | Built (Phases 3 and 4): map with orthophoto and data layers, stops, route, walk-back area with EVA time slider, energy budget, route profile, contingency simulator (buddy injured, solar particle event), science auto-planner, helmet mode with turn-by-turn steps, voice commands. Works offline after the first load. |
 
 ## How it works
 
@@ -21,7 +21,15 @@ and what to do if a solar storm starts or one of them is injured. Everything run
   than walking downhill, so the way out and the way back have different costs.
 - **Walk-back area:** from every cell, the energy and time needed to get back to the habitat. It shrinks as the walk goes on.
 - **Buddy rescue:** one astronaut carries the other (both masses as load, at a slower pace), at most 2 km (NASA lunar rescue design).
-- **Radiation:** only the habitat and the rover are full shelters. Terrain gives partial shielding only.
+  If the habitat is out of reach, the rescuer goes to the nearest rover pickup zone.
+- **Radiation:** only the habitat and the rover are full shelters. In a solar particle event the crew goes to the full shelter
+  that the later of the two reaches first. The nearest sheltered terrain cell (open sky at most 90%, from the horizon model)
+  is listed as "partial shielding only" and is never recommended. No dose rates are invented: the app quotes only the
+  measured May 2024 total beside Curiosity.
+- **Science planner:** candidates are the 7 real Curiosity stops plus up to 10 science-value peaks (no Curiosity image).
+  It adds the stop with the most science value per extra joule while the plan keeps the energy reserve, EVA time and walk radius.
+- **Turn-by-turn:** the route is split into steps where the heading changes by more than 30 deg, with a compass direction,
+  a distance and a caution-slope warning.
 
 Every constant is listed in [docs/assumptions.md](docs/assumptions.md) as SOURCED (with its source) or ASSUMPTION (our choice).
 The app shows a grey "assumption" tag next to every value that uses an ASSUMPTION constant. Its tooltip names the constants
@@ -49,7 +57,7 @@ npm test                                                    engine tests
 cd ../app
 npm install
 npm run dev                                                 app at http://localhost:5173 (no offline cache in dev)
-npm test                                                    app tests (grid cell <-> map coordinates)
+npm test                                                    app tests (coordinates, helmet view, voice parser and answers)
 npm run build                                               type-check and build to app/dist/
 npm run preview                                             serve the build at http://localhost:4173, with the offline cache
 ```
@@ -61,21 +69,33 @@ The app reads the pipeline output in `app/public/sites/gale_boxwork/` and runs t
 
 - Click the map, or a Curiosity stop marker (s1 to s7), to add a stop. Drag a stop to move it. Right-click a stop to delete it.
 - "Set start" and "Set end", then click the map. By default the walk starts and ends at the habitat. Esc cancels.
+- "Auto-plan stops" picks the stops for you (about 6 s the first time on the real site, about 4 s after that). Science peaks show as dashed violet markers.
 - Move the EVA timeline slider: the engine places crew A on the plan at that time and redraws the walk-back area.
   Green: can return and keep the reserve. Amber: can return only by using the reserve. Clear: cannot return in time or energy.
   On this 3 km site the return energy from any reachable cell is small, so the time limit (EVA_DURATION_H) shrinks the area most,
   in the last hour of the EVA.
+- Crew B follows A on the same path, 2 minutes behind by default ("Buddy B starts later by" slider). Drag the B marker on the
+  map to place B anywhere; "Put B back on the timeline" undoes it. The separation turns amber above 100 m.
+- "Simulate buddy injured" (choose who is injured, A or B): the rescue path (dotted orange), the smaller safe area,
+  and the action card with time, distance and energy.
+- "Simulate solar particle event": orange alert banner with the time to the shelter, the path to it, and a shelter table
+  with both crewmembers' times.
+- "Helmet mode": full-screen, high-contrast display with a big arrow and the current step, next stop, turn-back time,
+  buddy distance, radiation status and the Curiosity image of the next stop. During a contingency it shows the recommended action.
+  Quick-command buttons answer out loud (speech synthesis, offline). "Speak a command" uses the browser's speech recognition
+  where available; it may need internet, the buttons always work offline. Esc leaves helmet mode.
 
 ## Deploy (GitHub Pages)
 
 The workflow `.github/workflows/deploy.yml` runs the engine tests and the app tests, builds `/app` with the base path
 `/<repo-name>/`, and deploys `app/dist` to GitHub Pages on every push to `main`.
 
-1. Create a GitHub repository and push this folder to its `main` branch. `app/public/sites/` (about 31 MB) must be committed;
-   `data/raw/` stays out (it is gitignored).
+1. Push this folder to the `main` branch of a GitHub repository (this project: https://github.com/ashu-tagore/Mars-Walk).
+   `app/public/sites/` (about 31 MB) must be committed; `data/raw/` stays out (it is gitignored).
 2. In the repository: Settings > Pages > Build and deployment > Source: "GitHub Actions".
 3. Push to `main`, or run the workflow by hand (Actions > "Deploy app to GitHub Pages" > Run workflow).
-4. The site is at `https://<owner>.github.io/<repo-name>/`. The URL is also on the workflow run page.
+4. The site is at `https://<owner>.github.io/<repo-name>/` (this project: https://ashu-tagore.github.io/Mars-Walk/).
+   The URL is also on the workflow run page.
 5. Offline check: open the URL in a Chrome or Edge private window and wait until the header badge says "offline ready"
    (the service worker has then stored the app and all 795 site files, about 30 MB). Turn the network off
    (DevTools > Network > Offline, or disconnect), reload, and use the app. Firefox private windows do not run service workers,
