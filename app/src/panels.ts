@@ -126,19 +126,57 @@ export function formatDuration(seconds: number | null | undefined): string {
 }
 
 
-// A grey "assumption" tag whose tooltip names each ASSUMPTION constant in `names`, or null if none is one.
-export function assumptionTag(meta: SiteMeta | null, names: string[]): HTMLElement | null {
+// Text and tooltip of an "assumption" tag, or null when none of `names` is an ASSUMPTION constant.
+// `params` are the user's settings (About page). A changed constant shows its current value next to the documented one,
+// so the tag never describes a value the engine is no longer using.
+export function tagDescription(
+  meta: SiteMeta | null,
+  names: string[],
+  params: Record<string, number | null>,
+): { text: string; title: string; changed: boolean } | null {
   if (!meta) return null;
   const lines: string[] = [];
+  let changed = false;
   for (const name of names) {
     const entry = meta.constants[name];
-    if (entry && entry.status === "ASSUMPTION") lines.push(`${name} = ${entry.value}: ${entry.source}`);
+    if (!entry || entry.status !== "ASSUMPTION") continue;
+    const setting = params[name];
+    const isChanged = typeof setting === "number";
+    if (isChanged) changed = true;
+    const value = isChanged ? `${setting} (your setting; docs: ${entry.value})` : entry.value;
+    lines.push(`${name} = ${value}: ${entry.source}`);
   }
   if (lines.length === 0) return null;
-  const tag = el("span", "assumption-tag", "assumption");
-  tag.title = `Uses ASSUMPTION constants (docs/assumptions.md):\n${lines.join("\n")}`;
+  const heading = changed
+    ? "Uses ASSUMPTION constants, some changed in Settings (docs/assumptions.md):"
+    : "Uses ASSUMPTION constants (docs/assumptions.md):";
+  return { text: changed ? "assumption, changed" : "assumption", title: `${heading}\n${lines.join("\n")}`, changed };
+}
+
+function describeTag(tag: HTMLElement, meta: SiteMeta | null, params: Record<string, number | null>): void {
+  const names = (tag.dataset.constants ?? "").split(",").filter((name) => name !== "");
+  const description = tagDescription(meta, names, params);
+  if (!description) return;
+  tag.textContent = description.text;
+  tag.title = description.title;
+  tag.classList.toggle("is-changed", description.changed);
+}
+
+// A grey "assumption" tag whose tooltip names each ASSUMPTION constant in `names`, or null if none is one.
+// Most tags are built once, so refreshAssumptionTags updates them all after a settings change.
+export function assumptionTag(meta: SiteMeta | null, names: string[]): HTMLElement | null {
+  if (!tagDescription(meta, names, {})) return null;
+  const tag = el("span", "assumption-tag");
+  tag.dataset.constants = names.join(",");
   tag.tabIndex = 0;
+  describeTag(tag, meta, getState().params);
   return tag;
+}
+
+function refreshAssumptionTags(state: MissionState): void {
+  for (const tag of document.querySelectorAll<HTMLElement>(".assumption-tag[data-constants]")) {
+    describeTag(tag, state.meta, state.params);
+  }
 }
 
 export function withTag(node: HTMLElement, tag: HTMLElement | null): HTMLElement {
@@ -202,6 +240,7 @@ export function createPanels(parts: PanelParts): void {
     renderLeft(left, state);
     if (right) renderRight(right, state, previous);
     renderProfile(profile, state);
+    if (!previous || previous.params !== state.params) refreshAssumptionTags(state);
   };
   subscribe(onState);
   onState(getState(), null);

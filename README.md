@@ -6,6 +6,8 @@ NASA Space Apps 2026, challenge "Interplanetary Survival Guide: Martian Map".
 It tells two astronauts which science stops are worth the energy, which route to walk, when they must turn back,
 and what to do if a solar storm starts or one of them is injured. Everything runs in the browser, with no server.
 
+**Live app:** <https://ashu-tagore.github.io/Mars-Walk/> (works offline after the first load; use Chrome or Edge).
+
 ## Status
 
 | Part | State |
@@ -33,7 +35,8 @@ and what to do if a solar storm starts or one of them is injured. Everything run
 
 Every constant is listed in [docs/assumptions.md](docs/assumptions.md) as SOURCED (with its source) or ASSUMPTION (our choice).
 The app shows a grey "assumption" tag next to every value that uses an ASSUMPTION constant. Its tooltip names the constants
-(read from the `constants` table in `meta.json`).
+(read from the `constants` table in `meta.json`). When a value is changed in Settings, its tags read "assumption, changed"
+and the tooltip shows the new value next to the documented one.
 
 ## Setup and commands
 
@@ -88,6 +91,9 @@ The app reads the pipeline output in `app/public/sites/gale_boxwork/` and runs t
   buddy distance, radiation status and the Curiosity image of the next stop. During a contingency it shows the recommended action.
   Quick-command buttons answer out loud (speech synthesis, offline). "Speak a command" uses the browser's speech recognition
   where available; it may need internet, the buttons always work offline. Esc leaves helmet mode.
+- "About" (header): how the planner works, the data sources and their limits, every assumption with its reason, and
+  Settings for the 8 adjustable values (EVA duration, reserve, suit mass, and others). The engine recalculates every
+  number after a change; "Reset all to the documented values" undoes it.
 
 ## Deploy (GitHub Pages)
 

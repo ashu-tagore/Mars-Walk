@@ -1000,6 +1000,12 @@ body.about-open {
   vertical-align: 1px;
 }
 
+/* The value behind this tag was changed in Settings, so it is not the documented one. */
+.assumption-tag.is-changed {
+  color: var(--caution);
+  border-color: var(--caution);
+}
+
 .stat-row {
   display: flex;
   justify-content: space-between;

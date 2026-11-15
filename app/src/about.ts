@@ -270,7 +270,7 @@ export function createAbout(container: HTMLElement): void {
     settingsNote.textContent = state.paramsError
       ? `The engine rejected the change: ${state.paramsError}`
       : changed > 0
-        ? `${changed} setting(s) differ from docs/assumptions.md. Assumption tags still describe the documented values.`
+        ? `${changed} setting(s) differ from docs/assumptions.md. Tags that use them now read "assumption, changed" and show your value.`
         : "";
   };
   subscribe((state) => render(state));
