@@ -175,7 +175,15 @@ const EYE_CLOSED =
 
 // ---- Entry point ----
 
-export type PanelParts = { header: HTMLElement; left: HTMLElement; right: HTMLElement; profile: HTMLElement };
+export type PanelParts = {
+  header: HTMLElement;
+  left: HTMLElement; // the layer menu popover
+  layersToggle: HTMLElement; // the button that opens it
+  modes: HTMLElement; // Add stop / Start / End switch over the map
+  right: HTMLElement; // the drawer with the Plan, Status and Contingency tabs
+  dock: HTMLElement; // verdict, EVA clock, timeline slider
+  profile: HTMLElement; // route profile sheet, closed by default
+};
 
 export function createPanels(parts: PanelParts): void {
   const header = buildHeader(parts.header);
@@ -187,8 +195,8 @@ export function createPanels(parts: PanelParts): void {
     renderHeader(header, state);
     if (!state.meta) return;
     if (!left) {
-      left = buildLeft(parts.left, state.meta);
-      right = buildRight(parts.right, state.meta);
+      left = buildLeft(parts.left, parts.layersToggle, state.meta);
+      right = buildRight(parts.right, parts.dock, parts.modes, parts.profile, state.meta);
       previous = null;
     }
     renderLeft(left, state);
@@ -205,6 +213,7 @@ function buildHeader(root: HTMLElement) {
   root.replaceChildren();
   const title = el("div", "app-title");
   title.append(el("span", "app-name", "Boxwork EVA Navigator"), el("span", "site-name", ""));
+  // A tag with a status dot: the dot colour is set from data-status in style.css.
   const status = el("div", "engine-status");
   const dot = el("span", "status-dot");
   const text = el("span", "status-text", "loading");
@@ -214,12 +223,17 @@ function buildHeader(root: HTMLElement) {
   offline.title = "The service worker stores the app and all site data, so the page works without a network after the first load.";
   const custom = el("span", "custom-badge", "custom settings");
   custom.title = "Some assumptions differ from docs/assumptions.md. See About the data.";
-  const about = el("button", "btn", "About the data");
+  const about = el("button", "mw-btn mw-btn-link", "About the data");
   about.type = "button";
   about.addEventListener("click", () => update({ aboutOpen: true }));
+  // The one primary action of the screen: the crew display used during the walk.
+  const helmet = el("button", "mw-btn mw-btn-primary", "Helmet mode");
+  helmet.type = "button";
+  helmet.title = "High-contrast crew display with quick commands and spoken answers. Esc to leave.";
+  helmet.addEventListener("click", () => update({ helmet: true }));
   const right = el("div", "header-right");
-  right.append(custom, about, offline);
-  root.append(title, status, right);
+  right.append(status, custom, offline, about, helmet);
+  root.append(title, right);
   return { siteName: title.lastElementChild as HTMLElement, status, text, calc, offline, custom };
 }
 
@@ -228,9 +242,9 @@ function renderHeader(refs: ReturnType<typeof buildHeader>, state: MissionState)
   refs.status.dataset.status = state.engine.status;
   const labels = { loading: "loading site", ready: "engine ready", calculating: "calculating", error: "engine error" };
   refs.text.textContent = labels[state.engine.status];
-  refs.status.title = state.engine.error ?? "";
   const calc = state.engine.lastCalc;
   refs.calc.textContent = calc ? `last ${calc.request} ${Math.round(calc.ms)} ms` : "";
+  refs.status.title = state.engine.error ?? refs.calc.textContent;
   refs.offline.textContent = state.offlineReady ? "offline ready" : "offline: caching";
   refs.offline.classList.toggle("ready", state.offlineReady);
   // Dev server has no service worker: hide the badge instead of showing a state that never changes.
@@ -242,9 +256,20 @@ function renderHeader(refs: ReturnType<typeof buildHeader>, state: MissionState)
 
 type LayerRow = { id: string; button: HTMLButtonElement };
 
-function buildLeft(root: HTMLElement, meta: SiteMeta) {
+function buildLeft(root: HTMLElement, toggle: HTMLElement, meta: SiteMeta) {
   root.replaceChildren();
   const box = section(root, "Data layers");
+  const setOpen = (open: boolean): void => {
+    root.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+  };
+  toggle.addEventListener("click", () => setOpen(root.hidden));
+  // Close when the user goes back to the map, so the menu never sits over the terrain they are working on.
+  document.addEventListener("pointerdown", (event) => {
+    const target = event.target as Node;
+    const insideMenu = root.contains(target) || toggle.contains(target);
+    if (!insideMenu) setOpen(false);
+  });
   const rows: LayerRow[] = [];
 
   const addRow = (id: string, label: string, source: string, description: string, tag: HTMLElement | null): void => {
@@ -285,33 +310,114 @@ function buildLeft(root: HTMLElement, meta: SiteMeta) {
   addRow("markers", "Site points and plan", "Pipeline rules; NASA/JPL-Caltech (Curiosity stops)", "Habitat, rover, pickup zones, Curiosity stops, your start, end and stops.", assumptionTag(meta, DEPENDS.markers));
 
   const legend = el("div", "legend");
+  // Each row names what it explains: a layer id, or a scenario whose path only shows during that simulation.
   legend.innerHTML = `
-    <div class="legend-row"><span class="swatch swatch-safe"></span>Safe return, reserve kept</div>
-    <div class="legend-row"><span class="swatch swatch-reserve"></span>Return only with the reserve</div>
-    <div class="legend-row"><span class="swatch swatch-route"></span>Planned route</div>
-    <div class="legend-row"><span class="swatch swatch-return"></span>Return path from crew</div>
-    <div class="legend-row"><span class="swatch swatch-rescue"></span>Rescue path (buddy injured)</div>
-    <div class="legend-row"><span class="swatch swatch-shelter"></span>Path to shelter (solar alert)</div>`;
+    <div class="legend-row" data-layer="envelope"><span class="swatch swatch-safe"></span>Safe return, reserve kept</div>
+    <div class="legend-row" data-layer="envelope"><span class="swatch swatch-reserve"></span>Return only with the reserve</div>
+    <div class="legend-row" data-layer="route"><span class="swatch swatch-route"></span>Planned route</div>
+    <div class="legend-row" data-layer="route"><span class="swatch swatch-return"></span>Return path from crew</div>
+    <div class="legend-row" data-layer="route" data-scenario="buddy_injured"><span class="swatch swatch-rescue"></span>Rescue path (buddy injured)</div>
+    <div class="legend-row" data-layer="route" data-scenario="sep_event"><span class="swatch swatch-shelter"></span>Path to shelter (solar alert)</div>`;
   box.append(legend);
-  return { rows };
+  const legendRows = Array.from(legend.querySelectorAll<HTMLElement>(".legend-row"));
+  return { rows, toggle, legendRows };
 }
 
 function renderLeft(refs: ReturnType<typeof buildLeft>, state: MissionState): void {
+  let dataLayersOn = 0;
   for (const row of refs.rows) {
     const visible = state.layers[row.id] === true;
     row.button.innerHTML = visible ? EYE_OPEN : EYE_CLOSED;
     row.button.classList.toggle("on", visible);
     row.button.setAttribute("aria-pressed", String(visible));
+    const isDataLayer = state.meta?.overlays.some((overlay) => overlay.id === row.id) === true;
+    if (visible && isDataLayer) dataLayersOn += 1;
+  }
+  refs.toggle.textContent = dataLayersOn > 0 ? `Layers · ${dataLayersOn} on` : "Layers";
+
+  // The legend lists only what is on the map now.
+  for (const row of refs.legendRows) {
+    const layerOn = state.layers[row.dataset.layer ?? ""] === true;
+    const scenario = row.dataset.scenario;
+    const scenarioShown = scenario === undefined || state.scenario === scenario;
+    row.hidden = !(layerOn && scenarioShown);
   }
 }
 
-// ---- Right: plan, timeline, energy, route summary, contingencies ----
+// ---- Drawer tabs, map mode switch, bottom dock ----
 
-function buildRight(root: HTMLElement, meta: SiteMeta) {
+type DrawerTab = "plan" | "status" | "contingency";
+
+// Tabs at the top of the drawer. Only one tab's sections show at a time, so the drawer never becomes a long scroll.
+// Sections opt in with data-tab. Returns the function that switches tabs.
+function buildTabs(root: HTMLElement): (tab: DrawerTab) => void {
+  const bar = el("div", "drawer-tabs");
+  bar.setAttribute("role", "tablist");
+  const labels: Record<DrawerTab, string> = { plan: "Plan", status: "Status", contingency: "Contingency" };
+  const buttons = new Map<DrawerTab, HTMLButtonElement>();
+
+  const show = (tab: DrawerTab): void => {
+    for (const [id, button] of buttons) {
+      button.setAttribute("aria-selected", String(id === tab));
+      button.tabIndex = id === tab ? 0 : -1;
+    }
+    for (const box of root.querySelectorAll<HTMLElement>("[data-tab]")) box.hidden = box.dataset.tab !== tab;
+    root.scrollTop = 0;
+  };
+
+  for (const tab of Object.keys(labels) as DrawerTab[]) {
+    const button = el("button", "mw-btn mw-btn-outline drawer-tab", labels[tab]);
+    button.type = "button";
+    button.setAttribute("role", "tab");
+    button.addEventListener("click", () => show(tab));
+    buttons.set(tab, button);
+    bar.append(button);
+  }
+
+  const hide = el("button", "drawer-hide", "Hide");
+  hide.type = "button";
+  hide.title = "Hide the panel to see the whole map (M)";
+  hide.addEventListener("click", () => setDrawerOpen(false));
+  bar.append(hide);
+  root.prepend(bar);
+  return show;
+}
+
+// The drawer state is a view preference, not mission state, so it lives on the page element and not in the store.
+function setDrawerOpen(open: boolean): void {
+  document.body.classList.toggle("drawer-closed", !open);
+}
+
+function isTyping(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+// ---- Right: plan, crew, energy, route summary, contingencies ----
+
+function buildRight(root: HTMLElement, dock: HTMLElement, modes: HTMLElement, profile: HTMLElement, meta: SiteMeta) {
   root.replaceChildren();
+  dock.replaceChildren();
+  modes.replaceChildren();
+
+  // Map mode switch: what the next map click sets. One group over the map instead of buttons in the panel.
+  const modeButton = (mode: "stop" | "start" | "end", label: string): HTMLButtonElement => {
+    const button = el("button", "mw-btn mw-btn-outline mode-option", label);
+    button.type = "button";
+    button.addEventListener("click", () => {
+      const isSame = getState().placing === mode;
+      update({ placing: isSame ? "stop" : mode });
+    });
+    modes.append(button);
+    return button;
+  };
+  const addStopMode = modeButton("stop", "Add stop");
+  const setStart = modeButton("start", "Set start");
+  const setEnd = modeButton("end", "Set end");
 
   // Plan
   const plan = section(root, "Plan");
+  plan.dataset.tab = "plan";
   const hint = el("div", "hint");
   const buttons = el("div", "button-row");
   const makeButton = (label: string, onClick: () => void): HTMLButtonElement => {
@@ -322,15 +428,13 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
     return button;
   };
   const planScience = makeButton(AUTO_PLAN_LABEL, () => update({ scienceStatus: "requested" }));
-  planScience.classList.add("primary");
+  planScience.className = "mw-btn mw-btn-outline strong";
   planScience.title =
     "Picks stops from the Curiosity stops and the science-value peaks, habitat to habitat: each step adds the stop with the most science value per added joule, " +
     "while the plan keeps the energy reserve, the EVA time and the walk radius (docs/data-contract.md, 4.1). " +
     "Replaces your stops; start and end become the habitat.";
-  const setStart = makeButton("Set start", () => update({ placing: getState().placing === "start" ? "stop" : "start" }));
-  const setEnd = makeButton("Set end", () => update({ placing: getState().placing === "end" ? "stop" : "end" }));
-  makeButton("Start and end at habitat", () => update({ start: null, end: null, placing: "stop" }));
-  makeButton("Clear stops", () => update({ stops: [], selectedStop: null }));
+  makeButton("Start and end at habitat", () => update({ start: null, end: null, placing: "stop" })).className = "mw-btn mw-btn-link";
+  makeButton("Clear stops", () => update({ stops: [], selectedStop: null })).className = "mw-btn mw-btn-link";
   const scienceNote = el("div", "science-note");
   const startEnd = el("div", "start-end num");
   const stopList = el("ol", "stop-list");
@@ -339,19 +443,23 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
 
   // Timeline
   // The slider range is EVA_DURATION_H (a setting), set in renderRight.
-  const timeline = section(root, "EVA timeline");
-  const sliderRow = el("div", "slider-head");
-  const elapsed = el("span", "big-number num", DASH);
-  const total = el("span", "slider-total num", `/ ${DASH}`);
+  // The EVA clock and slider sit in the dock, always in view. The crew details sit in the Status tab.
+  const timeline = section(root, "Crew");
+  timeline.dataset.tab = "status";
+  const sliderRow = el("div", "dock-clock");
+  const elapsed = el("span", "dock-clock-value num", DASH);
+  const total = el("span", "dock-clock-total num", `/ ${DASH}`);
   total.title = sourceTooltip(meta, "EVA_DURATION_H");
-  sliderRow.append(elapsed, total);
+  const clockLabel = el("span", "mw-eyebrow", "EVA time");
+  const clockValue = el("span", "dock-clock-numbers");
+  clockValue.append(elapsed, total);
+  sliderRow.append(clockLabel, clockValue);
   const slider = el("input", "timeline-slider");
   slider.type = "range";
   slider.min = "0";
   slider.step = String(TIMELINE_STEP_S);
   slider.setAttribute("aria-label", "Elapsed EVA time");
   slider.addEventListener("input", () => update({ elapsedS: Number(slider.value) }));
-  timeline.append(sliderRow, slider);
   const turnBack = statRow(timeline, "Turn back by", assumptionTag(meta, DEPENDS.turnBack));
   const crewAt = statRow(timeline, "Crew A position", assumptionTag(meta, DEPENDS.timeline));
 
@@ -389,6 +497,7 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
 
   // Energy budget
   const energy = section(root, "Energy budget");
+  energy.dataset.tab = "status";
   const budgetHead = withTag(el("div", "budget-head", "Used | remaining | reserve (hatched) | plan total (tick)"), assumptionTag(meta, DEPENDS.budget));
   const bar = el("div", "budget-bar");
   const reserve = el("div", "budget-reserve");
@@ -404,9 +513,10 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
 
   // Route summary
   const summary = section(root, "Route");
+  summary.dataset.tab = "status";
+  // The verdict is the first thing both crew members look at, so it sits in the dock. Its reasons stay here.
   const verdict = el("div", "verdict");
-  verdict.title = "Rules: docs/assumptions.md, section Engine";
-  summary.append(verdict);
+  verdict.title = "Rules: docs/assumptions.md, section Engine. Reasons: Status tab.";
   const distance = statRow(summary, "Distance", assumptionTag(meta, DEPENDS.routeTotals));
   const time = statRow(summary, "Time (walking + stops)", assumptionTag(meta, DEPENDS.routeTotals));
   const stopTime = statRow(summary, "Time at stops");
@@ -418,6 +528,7 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
 
   // Contingencies: each button switches its scenario on or off. The event happens at the EVA slider time.
   const contingencies = section(root, "Contingencies");
+  contingencies.dataset.tab = "contingency";
   const scenarioRow = el("div", "button-row");
   const scenarioButton = (scenario: Scenario, label: string, help: string): HTMLButtonElement => {
     const button = el("button", "btn", label);
@@ -451,11 +562,6 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
     return { id, option };
   });
   scenarioRow.append(injuredChoice);
-  const helmet = el("button", "btn", "Helmet mode");
-  helmet.type = "button";
-  helmet.title = "High-contrast crew display with quick commands and spoken answers. Esc to leave.";
-  helmet.addEventListener("click", () => update({ helmet: true }));
-  scenarioRow.append(helmet);
   const contingencyBody = el("div", "contingency-body action-card");
   contingencies.append(scenarioRow, contingencyBody);
   const action = statRow(contingencyBody, "Recommended action");
@@ -471,9 +577,38 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
   const sepContext = el("div", "sep-context");
   contingencyBody.append(scenarioTag, shelterTable, sepContext, contingencyNotes);
 
+  // Status tab order: the budget first, then the route, then the crew details.
+  root.append(plan, energy, summary, timeline, contingencies);
+  const showTab = buildTabs(root);
+  showTab("plan");
+
+  // Dock: verdict, EVA clock, slider, then the two links that open the profile sheet and the drawer.
+  const profileButton = el("button", "mw-btn mw-btn-link dock-link", "Profile");
+  profileButton.type = "button";
+  profileButton.setAttribute("aria-expanded", "false");
+  profileButton.addEventListener("click", () => {
+    profile.hidden = !profile.hidden;
+    profileButton.setAttribute("aria-expanded", String(!profile.hidden));
+  });
+  const panelButton = el("button", "mw-btn mw-btn-link dock-link dock-panel", "Panel");
+  panelButton.type = "button";
+  panelButton.title = "Show the panel (M)";
+  panelButton.addEventListener("click", () => setDrawerOpen(true));
+  dock.append(verdict, sliderRow, slider, profileButton, panelButton);
+
+  document.addEventListener("keydown", (event) => {
+    const isToggleKey = event.key === "m" || event.key === "M";
+    const hasModifier = event.ctrlKey || event.metaKey || event.altKey;
+    if (!isToggleKey || hasModifier || isTyping(event.target)) return;
+    if (getState().helmet || getState().aboutOpen) return;
+    setDrawerOpen(document.body.classList.contains("drawer-closed"));
+  });
+
   return {
     meta,
+    showTab,
     hint,
+    addStopMode,
     planScience,
     scienceNote,
     setStart,
@@ -547,8 +682,9 @@ function renderRight(refs: ReturnType<typeof buildRight>, state: MissionState, p
     };
     refs.hint.textContent = hints[state.placing];
     refs.hint.classList.toggle("active", state.placing !== "stop");
-    refs.setStart.classList.toggle("active", state.placing === "start");
-    refs.setEnd.classList.toggle("active", state.placing === "end");
+    refs.addStopMode.setAttribute("aria-pressed", String(state.placing === "stop"));
+    refs.setStart.setAttribute("aria-pressed", String(state.placing === "start"));
+    refs.setEnd.setAttribute("aria-pressed", String(state.placing === "end"));
   }
 
   const scienceChanged = changed("scienceStatus") || changed("sciencePlan") || changed("scienceError") || changed("stops");
@@ -646,6 +782,12 @@ function renderRight(refs: ReturnType<typeof buildRight>, state: MissionState, p
   }
 
   if (changed("route") || changed("routeError")) renderRouteSummary(refs, state.route, state.routeError);
+  // A simulated event opens its tab and the drawer, so the action card is in view without searching.
+  const scenarioStarted = previous !== null && changed("scenario") && state.scenario !== "none";
+  if (scenarioStarted) {
+    refs.showTab("contingency");
+    setDrawerOpen(true);
+  }
   const contingencyChanged = changed("scenario") || changed("contingency") || changed("contingencyError") || changed("injured");
   if (contingencyChanged) renderContingency(refs, state);
 }
