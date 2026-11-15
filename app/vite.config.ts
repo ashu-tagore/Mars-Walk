@@ -20,7 +20,7 @@ export default defineConfig({
       injectRegister: null,
       manifest: false,
       workbox: {
-        globPatterns: ["**/*.{html,js,css,json,bin,png,jpg,svg}"],
+        globPatterns: ["**/*.{html,js,css,json,bin,png,jpg,svg,woff2}"],
         maximumFileSizeToCacheInBytes: MAX_PRECACHE_FILE_BYTES,
       },
     }),

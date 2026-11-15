@@ -1,5 +1,11 @@
 // Wiring only: build the panels and the map, open the site, register the offline service worker.
 
+// Fonts are bundled, not fetched, so the app works offline. Latin subsets only: all UI text is English.
+import "@fontsource/inter/latin-400.css";
+import "@fontsource/inter/latin-500.css";
+import "@fontsource/ibm-plex-mono/latin-400.css";
+import "@fontsource/ibm-plex-mono/latin-500.css";
+import "@fontsource/space-grotesk/latin-400.css";
 import "./style.css";
 import { registerSW } from "virtual:pwa-register";
 import { createAbout } from "./about";
@@ -17,7 +23,15 @@ function byId(id: string): HTMLElement {
   return node;
 }
 
-createPanels({ header: byId("header"), left: byId("left-panel"), right: byId("right-panel"), profile: byId("profile") });
+createPanels({
+  header: byId("header"),
+  left: byId("left-panel"),
+  layersToggle: byId("layers-toggle"),
+  modes: byId("modes"),
+  right: byId("right-panel"),
+  dock: byId("dock"),
+  profile: byId("profile"),
+});
 createMapView(byId("map"));
 createHelmet(document.body);
 createAbout(document.body);

@@ -8,8 +8,9 @@ import { type Cell, cellToLatLng, gridBounds, latLngToCell, tileZoomOffset } fro
 import { type Envelope, type MissionState, type SiteMeta, addStop, getState, moveStop, removeStop, subscribe, update } from "./store";
 
 // Envelope colors, RGBA. Mask values: docs/data-contract.md, Envelope (0 = cannot return, 1 = reserve only, 2 = safe).
-const ENVELOPE_SAFE_RGBA = [46, 204, 113, 72];
-const ENVELOPE_RESERVE_RGBA = [255, 176, 32, 120];
+// Design system tokens map-safe and map-reserve.
+const ENVELOPE_SAFE_RGBA = [61, 220, 132, 107];
+const ENVELOPE_RESERVE_RGBA = [255, 176, 32, 128];
 
 // docs/assumptions.md, "App display" (reasons there).
 const OVERLAY_OPACITY = 0.75;
@@ -116,8 +117,9 @@ function buildMap(container: HTMLElement, meta: SiteMeta, siteUrl: string): MapV
   const envelopeOverlay = L.imageOverlay(EMPTY_IMAGE, bounds, { className: "pixelated envelope-overlay", interactive: false });
   layers.envelope = envelopeOverlay;
 
-  // Route: a wide faint line under a thin bright one gives the glow. Not interactive, so clicks on it still add stops.
-  const routeGlow = L.polyline([], { className: "route-glow", weight: 12, interactive: false });
+  // Route: a dark casing under a light core, so the line reads on bright dust and dark rock alike.
+  // Not interactive, so clicks on it still add stops.
+  const routeGlow = L.polyline([], { className: "route-glow", weight: 7, interactive: false });
   const routeCore = L.polyline([], { className: "route-core", weight: 3, interactive: false });
   const returnPath = L.polyline([], { className: "return-path", weight: 2, dashArray: "6 6", interactive: false });
   // Buddy injured: the rescuer's walk and carry, dotted so it reads apart from the dashed way home.
@@ -128,7 +130,8 @@ function buildMap(container: HTMLElement, meta: SiteMeta, siteUrl: string): MapV
   // The terrain partial shelter of a solar particle alert (simulate shelters, kind "partial").
   const alertMarkers = L.layerGroup().addTo(map);
 
-  // Solar particle alert banner over the top of the map. Text from the engine reply (render).
+  // Solar particle alert: a full-width bar along the top edge of the map, so it never covers the route.
+  // Text from the engine reply (render).
   const alertBanner = document.createElement("div");
   alertBanner.className = "alert-banner";
   alertBanner.setAttribute("role", "alert");

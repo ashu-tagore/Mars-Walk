@@ -67,6 +67,10 @@ The app reads the pipeline output in `app/public/sites/gale_boxwork/` and runs t
 
 ### Using the app
 
+- The map fills the screen. Over it: "Layers" (top left, the legend lists only the layers that are on), the
+  Add stop / Set start / Set end switch, the panel on the right with three tabs (Plan, Status, Contingency) and the
+  bottom dock (verdict, EVA clock, timeline slider, "Profile" for the route profile). Press M or "Hide" to hide the
+  panel and see the whole map; "Panel" in the dock brings it back.
 - Click the map, or a Curiosity stop marker (s1 to s7), to add a stop. Drag a stop to move it. Right-click a stop to delete it.
 - "Set start" and "Set end", then click the map. By default the walk starts and ends at the habitat. Esc cancels.
 - "Auto-plan stops" picks the stops for you (about 6 s the first time on the real site, about 4 s after that). Science peaks show as dashed violet markers.
