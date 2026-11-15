@@ -2,7 +2,9 @@
 
 import "./style.css";
 import { registerSW } from "virtual:pwa-register";
+import { createAbout } from "./about";
 import { openSite } from "./engine-client";
+import { createHelmet } from "./helmet";
 import { createMapView } from "./map-view";
 import { createPanels } from "./panels";
 import { update } from "./store";
@@ -17,9 +19,11 @@ function byId(id: string): HTMLElement {
 
 createPanels({ header: byId("header"), left: byId("left-panel"), right: byId("right-panel"), profile: byId("profile") });
 createMapView(byId("map"));
+createHelmet(document.body);
+createAbout(document.body);
 
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") update({ placing: "stop" });
+  if (event.key === "Escape") update({ placing: "stop", helmet: false, aboutOpen: false });
 });
 
 // Absolute URL: the worker resolves relative URLs against its own script location, not the page.

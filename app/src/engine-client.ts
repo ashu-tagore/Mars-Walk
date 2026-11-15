@@ -10,8 +10,9 @@
 // So a fast slider drag costs at most two walk-back runs, not one per slider step, and the UI never freezes.
 
 import type { Envelope, Route, ShelterTimes } from "../../engine/src/engine";
+import { CONTRACT_VERSION } from "../../engine/src/grid";
 import type { SciencePlan, SimState } from "../../engine/src/mission";
-import { type MissionState, type SiteMeta, getState, subscribe, update } from "./store";
+import { type MissionState, type SiteMeta, constantNumber, getState, subscribe, update } from "./store";
 
 // docs/data-contract.md, sections 3 and 4. Built from the engine's own types. worker.ts is not imported here:
 // it is Web Worker code and does not type-check against the page's DOM types.
@@ -26,21 +27,38 @@ type EngineReply =
   | SimState
   | { type: "error"; request: string; message: string };
 
-type Channel = "site" | "route" | "timeline";
+type Channel = "site" | "route" | "timeline" | "science" | "contingency" | "shelter" | "params";
 
 type Request = { id: number; channel: Channel; message: EngineMessage };
 
 type InFlight = Request & { sentAtMs: number };
 
 // The reply type each request expects (docs/data-contract.md, section 3). "error" is always possible.
-const EXPECTED_REPLY: Record<string, string> = { loadSite: "siteLoaded", planRoute: "route", simulate: "simState" };
+const EXPECTED_REPLY: Record<string, string> = {
+  loadSite: "siteLoaded",
+  planRoute: "route",
+  simulate: "simState",
+  planScience: "sciencePlan",
+  shelterTimes: "shelterTimes",
+  setParams: "paramsSet",
+};
 
 let worker: Worker | null = null;
 let nextId = 1;
 const inFlight: InFlight[] = [];
-const latestId: Record<Channel, number> = { site: 0, route: 0, timeline: 0 };
-const waiting: Record<Channel, Request | null> = { site: null, route: null, timeline: null };
+const latestId: Record<Channel, number> = { site: 0, route: 0, timeline: 0, science: 0, contingency: 0, shelter: 0, params: 0 };
+const waiting: Record<Channel, Request | null> = {
+  site: null,
+  route: null,
+  timeline: null,
+  science: null,
+  contingency: null,
+  shelter: null,
+  params: null,
+};
 let siteLoaded = false;
+// The settings the engine last accepted. A rejected setParams puts the store back to these.
+let acceptedParams: MissionState["params"] = {};
 
 // Loads meta.json for the map and panels, starts the worker and asks it to load the same site.
 // siteUrl must be absolute: the worker resolves relative URLs against its own script location.
@@ -52,6 +70,10 @@ export async function openSite(siteUrl: string): Promise<void> {
     const response = await fetch(siteUrl + "meta.json");
     if (!response.ok) throw new Error(`meta.json: HTTP ${response.status}`);
     meta = (await response.json()) as SiteMeta;
+    // Check before the map and panels read any field: a different version may have a different schema.
+    if (meta.version !== CONTRACT_VERSION) {
+      throw new Error(`meta.json version ${meta.version} is not supported (app reads version ${CONTRACT_VERSION})`);
+    }
   } catch (error) {
     const text = error instanceof Error ? error.message : String(error);
     update({ engine: { status: "error", error: `Cannot load site data: ${text}`, lastCalc: null } });
@@ -73,13 +95,29 @@ export async function openSite(siteUrl: string): Promise<void> {
 
 function onStoreChange(state: MissionState, previous: MissionState): void {
   if (!siteLoaded) return;
+  if (state.params !== previous.params) {
+    // After a rejected change the store goes back to the accepted settings, which the engine already has.
+    const isRollback = state.params === acceptedParams;
+    if (!isRollback) requestParams(state);
+    return;
+  }
+  const scienceRequested = state.scienceStatus === "requested" && previous.scienceStatus !== "requested";
+  if (scienceRequested) {
+    requestScience();
+    return;
+  }
   const planChanged = state.stops !== previous.stops || state.start !== previous.start || state.end !== previous.end;
   if (planChanged) {
     requestRoute();
     requestTimeline();
     return;
   }
-  if (state.elapsedS !== previous.elapsedS) requestTimeline();
+  const timelineChanged = state.elapsedS !== previous.elapsedS || state.buddyDelayS !== previous.buddyDelayS;
+  if (timelineChanged) {
+    requestTimeline();
+    return;
+  }
+  if (state.scenario !== previous.scenario) requestContingency();
 }
 
 // The plan in contract form. A missing start or end is the habitat (docs/data-contract.md, planRoute).
@@ -97,10 +135,49 @@ function requestRoute(): void {
 // Decision 1 (approved by the project owner): the timeline uses simulate with scenario "none".
 // Its envelope is walkback({ elapsedS, usedJ, position }) with usedJ and position taken from the plan timeline
 // (docs/data-contract.md, section 4.1). The app cannot compute usedJ itself without doing physics.
+// A contingency is asked for at the same moment, so it follows every timeline request.
 function requestTimeline(): void {
+  send("timeline", { type: "simulate", payload: simulatePayload(getState(), "none") });
+  requestContingency();
+}
+
+// The event happens at the slider time. Astronaut A is the display crewmember: in "buddy_injured" A is the rescuer
+// and B is injured (docs/data-contract.md, section 4.1).
+function requestContingency(): void {
   const state = getState();
-  const payload = { scenario: "none", atTimeS: state.elapsedS, astronaut: "A", ...planPayload(state) };
-  send("timeline", { type: "simulate", payload });
+  if (state.scenario === "none") {
+    if (state.contingency || state.contingencyError) update({ contingency: null, contingencyError: null });
+    return;
+  }
+  send("contingency", { type: "simulate", payload: simulatePayload(state, state.scenario) });
+}
+
+function simulatePayload(state: MissionState, scenario: MissionState["scenario"]) {
+  const delaysS = { A: 0, B: state.buddyDelayS };
+  return { scenario, atTimeS: state.elapsedS, astronaut: "A", delaysS, ...planPayload(state) };
+}
+
+// setParams changes only the names it is given (engine applyParams). Each message carries every name the user ever
+// set: a reset one with its docs/assumptions.md value (EVA_ENERGY_BUDGET_J: null = derived). So any one message gives
+// the full intended state, and "latest wins" may drop the ones before it.
+const touchedParams = new Set<string>();
+
+function requestParams(state: MissionState): void {
+  for (const name of Object.keys(state.params)) touchedParams.add(name);
+  const params: Record<string, number | null> = {};
+  for (const name of touchedParams) {
+    const setting = state.params[name];
+    const docsValue = name === "EVA_ENERGY_BUDGET_J" ? null : constantNumber(state.meta, name);
+    params[name] = setting === undefined ? docsValue : setting;
+  }
+  if (touchedParams.size === 0) return;
+  send("params", { type: "setParams", payload: { params } });
+}
+
+// Defaults of docs/data-contract.md: budgetJ = EVA_ENERGY_BUDGET_J, every meta.json waypoint is a candidate.
+function requestScience(): void {
+  update({ scienceStatus: "running", scienceError: null });
+  send("science", { type: "planScience", payload: {} });
 }
 
 function send(channel: Channel, message: EngineMessage): void {
@@ -164,9 +241,50 @@ function applyReply(request: InFlight, reply: EngineReply, roundTripMs: number):
     update({ route: reply, routeError: null, engine });
     return;
   }
+  if (reply.type === "sciencePlan") {
+    // The planner works habitat -> habitat, so start and end go back to the habitat. The new stops start a planRoute
+    // (onStoreChange); reply.route is the same planRoute result, so it is shown right away.
+    update({
+      sciencePlan: reply,
+      scienceStatus: "idle",
+      scienceError: null,
+      stops: reply.stops,
+      start: null,
+      end: null,
+      selectedStop: null,
+      placing: "stop",
+      route: reply.route,
+      routeError: null,
+      engine,
+    });
+    return;
+  }
+  if (reply.type === "simState" && request.channel === "contingency") {
+    // A reply for a scenario the user has since switched off is not shown.
+    const stillWanted = getState().scenario === reply.scenario;
+    update({ contingency: stillWanted ? reply : null, contingencyError: null, engine });
+    return;
+  }
+  if (reply.type === "paramsSet") {
+    // Every engine number depends on the settings: plan, timeline and shelter times again.
+    acceptedParams = getState().params;
+    update({ paramsError: null, engine });
+    requestRoute();
+    requestTimeline();
+    const crewCell = getState().crewCell;
+    if (crewCell) send("shelter", { type: "shelterTimes", payload: { from: crewCell } });
+    return;
+  }
+  if (reply.type === "shelterTimes") {
+    update({ shelterTimes: reply, engine });
+    return;
+  }
   if (reply.type === "simState") {
     // Astronaut A is the crewmember this display is for (simulate payload `astronaut`).
     const crew = reply.astronauts.find((astronaut) => astronaut.id === "A") ?? null;
+    const previousCell = getState().crewCell;
+    const moved = crew !== null && (previousCell === null || previousCell.col !== crew.cell.col || previousCell.row !== crew.cell.row);
+    if (moved) send("shelter", { type: "shelterTimes", payload: { from: crew.cell } });
     update({
       sim: reply,
       envelope: reply.envelope,
@@ -185,6 +303,23 @@ function applyError(channel: Channel, message: string, engine: MissionState["eng
   }
   if (channel === "route") {
     update({ route: null, routeError: message, engine });
+    return;
+  }
+  if (channel === "science") {
+    update({ scienceStatus: "idle", scienceError: message, engine });
+    return;
+  }
+  if (channel === "contingency") {
+    update({ contingency: null, contingencyError: message, engine });
+    return;
+  }
+  if (channel === "shelter") {
+    update({ shelterTimes: null, engine });
+    return;
+  }
+  if (channel === "params") {
+    // The engine keeps its old values when it rejects a change (applyParams throws before it assigns).
+    update({ params: acceptedParams, paramsError: message, engine });
     return;
   }
   update({ sim: null, envelope: null, usedJ: null, crewCell: null, timelineError: message, engine });

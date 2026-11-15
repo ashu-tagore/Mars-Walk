@@ -352,15 +352,17 @@ describe("performance", () => {
 describe("grid loading and worker", () => {
   it("parseSite rejects a wrong layer length and an unsupported version", () => {
     const site = makeTinySite(2, 1, [0, 0]);
-    const badFiles = { ...site.files, "shield.bin": new ArrayBuffer(3) };
-    expect(() => parseSite(site.meta, badFiles)).toThrow(/shield.bin/);
+    const badFiles = { ...site.files, "dem_quality.bin": new ArrayBuffer(3) };
+    expect(() => parseSite(site.meta, badFiles)).toThrow(/dem_quality.bin/);
     expect(() => parseSite({ ...site.meta, version: 2 }, site.files)).toThrow(/version/);
   });
 
-  it("loadSite reads meta.json and every layer through fetch", async () => {
+  it("loadSite reads meta.json and the three layers the engine uses through fetch", async () => {
     const site = makeFixtureSite({ size: 50 });
+    const requested: string[] = [];
     const fakeFetch = async (url: string) => {
       const name = url.split("/").pop() as string;
+      requested.push(name);
       const isMeta = name === "meta.json";
       const found = isMeta || name in site.files;
       return {
@@ -373,6 +375,8 @@ describe("grid loading and worker", () => {
     const grid = await loadSite("sites/fixture", fakeFetch);
     expect(grid.width).toBe(50);
     expect(grid.elevation.length).toBe(2500);
+    // REVIEW.md F-13: shield.bin and science_val.bin are not read by the engine, so they are not fetched.
+    expect(requested).toEqual(["meta.json", "elevation.bin", "terrain_cost.bin", "dem_quality.bin"]);
   });
 
   it("worker replies with contract types and errors", async () => {
@@ -397,6 +401,15 @@ describe("grid loading and worker", () => {
 
     const badParam = await handleMessage(state, { type: "setParams", payload: { params: { NOT_A_CONSTANT: 1 } } });
     expect(badParam).toEqual({ type: "error", request: "setParams", message: "unknown parameter NOT_A_CONSTANT" });
+
+    // Contract version 9: slope limits are fixed in terrain_cost.bin. A rejected message changes nothing.
+    for (const name of ["MAX_SLOPE_DEG", "CAUTION_SLOPE_DEG"]) {
+      const before = { ...state.params };
+      const reply = await handleMessage(state, { type: "setParams", payload: { params: { [name]: 25, RESERVE_FRACTION: 0.1 } } });
+      expect(reply.type).toBe("error");
+      expect((reply as { message: string }).message).toContain("fixed in terrain_cost.bin");
+      expect(state.params).toEqual(before);
+    }
 
     const later = await handleMessage(state, { type: "simulate", payload: {} });
     expect(later.type).toBe("error");

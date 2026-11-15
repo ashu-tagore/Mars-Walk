@@ -3,45 +3,84 @@
 // No physics here: every number is an engine reply value, a meta.json value, or a sum or unit conversion of those.
 
 import { type Cell, sameCell } from "./coords";
-import { type MissionState, type Route, type SiteMeta, getState, removeStop, setLayerVisible, subscribe, update } from "./store";
+import {
+  type MissionState,
+  type Route,
+  type Scenario,
+  type SimState,
+  type SiteMeta,
+  getState,
+  paramNumber,
+  removeStop,
+  setLayerVisible,
+  subscribe,
+  update,
+} from "./store";
 
 const DASH = "--";
-// DEFINITION rows of docs/assumptions.md ("Units"), plus joules per megajoule.
-const SECONDS_PER_HOUR = 3600;
+// DEFINITION rows of docs/assumptions.md ("Units").
+export const SECONDS_PER_HOUR = 3600;
 const SECONDS_PER_MINUTE = 60;
 const MINUTES_PER_HOUR = SECONDS_PER_HOUR / SECONDS_PER_MINUTE;
-const JOULES_PER_MJ = 1e6;
+export const JOULES_PER_MJ = 1e6;
 const METERS_PER_KM = 1000;
-// Slider step: one minute of EVA time.
+// docs/assumptions.md, "App display".
 const TIMELINE_STEP_S = 60;
+// docs/assumptions.md, "Units": the uint8 science value scale (docs/data-contract.md, section 1).
+const SCIENCE_VALUE_MAX = 255;
 
 // ---- Which docs/assumptions.md constants each displayed value depends on ----
 // The panel shows an "assumption" tag when any of them has status ASSUMPTION in meta.json `constants`.
-const DEPENDS = {
-  route: ["ROUTING_CELL_SIZE_M", "NO_CORNER_CUTTING"],
-  energy: [
-    "ASTRONAUT_MASS_KG",
-    "SUIT_AND_GEAR_MASS_KG",
-    "METABOLIC_MODEL_AT_MARS_GRAVITY",
-    "SANTEE_MIN_LEVEL_FRACTION",
-    "CAUTION_SLOPE_PENALTY",
-    "ROUGHNESS_COST_PER_M",
-    "BOULDER_COST_FACTOR",
-  ],
-  budget: ["EVA_ENERGY_BUDGET_J", "RESERVE_FRACTION"],
-  turnBack: ["TURN_BACK_MODEL", "EVA_ENERGY_BUDGET_J", "RESERVE_FRACTION"],
-  verdict: ["EVA_ENERGY_BUDGET_J", "RESERVE_FRACTION"],
-  envelope: ["EVA_ENERGY_BUDGET_J", "RESERVE_FRACTION", "ASTRONAUT_MASS_KG", "SUIT_AND_GEAR_MASS_KG", "METABOLIC_MODEL_AT_MARS_GRAVITY"],
-  markers: ["HABITAT_MIN_FLAT_AREA_M2", "ROVER_PICKUP_MAX_SLOPE_DEG", "ROVER_PICKUP_MIN_AREA_M2", "FULL_SHELTERS"],
-  timeline: ["STOP_DWELL_MIN", "WALK_SPEED_M_PER_S"],
-};
 
 // meta.json overlays with `assumption: true` -> the pipeline constants behind them (docs/assumptions.md, "Pipeline").
-const OVERLAY_DEPENDS: Record<string, string[]> = {
+export const OVERLAY_DEPENDS: Record<string, string[]> = {
+  slope: ["ROUTING_CELL_SIZE_M", "CAUTION_SLOPE_PENALTY"],
   boulders: ["BOULDER_LOCAL_WINDOW_M", "BOULDER_SHADOW_DARKNESS", "BOULDER_MIN_SHADOW_AREA_M2", "BOULDER_MAX_SHADOW_AREA_M2", "BOULDER_MAX_ELONGATION"],
   science: ["SCIENCE_WEIGHT_SULFATE", "SCIENCE_WEIGHT_RIDGE", "RIDGE_RADIUS_M", "SCIENCE_NORMALIZE_LOW_PERCENTILE", "SCIENCE_NORMALIZE_HIGH_PERCENTILE"],
   shield: ["TERRAIN_SHIELD_MODEL", "SHIELD_AZIMUTHS", "SHIELD_SEARCH_RADIUS_M"],
   dem_quality: ["DEM_QUALITY_COLUMN_RUN_M", "DEM_QUALITY_WINDOW_M", "DEM_QUALITY_COHERENCE_MIN", "DEM_QUALITY_MIN_AREA_M2"],
+};
+
+// The route is the minimum-energy path on the 3 m grid, so its geometry depends on the energy model too.
+const ROUTE = ["ROUTING_CELL_SIZE_M", "NO_CORNER_CUTTING"];
+const ENERGY = [
+  "ASTRONAUT_MASS_KG",
+  "SUIT_AND_GEAR_MASS_KG",
+  "METABOLIC_MODEL_AT_MARS_GRAVITY",
+  "SANTEE_MIN_LEVEL_FRACTION",
+  "CAUTION_SLOPE_PENALTY",
+  "ROUGHNESS_COST_PER_M",
+  "BOULDER_COST_FACTOR",
+];
+const BUDGET = ["EVA_ENERGY_BUDGET_J", "RESERVE_FRACTION"];
+
+export const DEPENDS = {
+  route: ROUTE,
+  energy: ENERGY,
+  budget: BUDGET,
+  // Route totals measured along the route: distance, time, elevation gain.
+  routeTotals: [...ROUTE, ...ENERGY],
+  turnBack: ["TURN_BACK_MODEL", ...BUDGET],
+  // CAUTION and NO_GO come from energy, the reserve, and low-confidence DEM cells (docs/assumptions.md, "Engine").
+  verdict: [...BUDGET, ...ENERGY, ...OVERLAY_DEPENDS.dem_quality],
+  envelope: [...BUDGET, "ASTRONAUT_MASS_KG", "SUIT_AND_GEAR_MASS_KG", "METABOLIC_MODEL_AT_MARS_GRAVITY"],
+  markers: [
+    "HABITAT_MIN_FLAT_AREA_M2",
+    "ROVER_PICKUP_MAX_SLOPE_DEG",
+    "ROVER_PICKUP_MIN_AREA_M2",
+    "ROVER_PICKUP_MAX_COUNT",
+    "ROVER_PICKUP_MIN_SPACING_M",
+    "SCIENCE_STOP_COUNT",
+    "SCIENCE_STOP_MIN_SPACING_M",
+    "FULL_SHELTERS",
+  ],
+  // Crew position along the route: walking pace and stop time along the minimum-energy route.
+  timeline: ["STOP_DWELL_MIN", "WALK_SPEED_M_PER_S", ...ROUTE, ...ENERGY],
+  buddy: ["BUDDY_MAX_SEPARATION_M"],
+  sepEvent: ["SEP_SHELTER_TARGET_MIN", "FULL_SHELTERS"],
+  rescue: ["RESCUE_SPEED_M_PER_S", "ASTRONAUT_MASS_KG", "SUIT_AND_GEAR_MASS_KG", "METABOLIC_MODEL_AT_MARS_GRAVITY", "EVA_ENERGY_BUDGET_J"],
+  // Planner limits (docs/data-contract.md, 4.1) and the waypoint science value it maximizes.
+  science: [...BUDGET, ...OVERLAY_DEPENDS.science],
 };
 
 // ---- Small helpers ----
@@ -53,22 +92,22 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = "", text 
   return node;
 }
 
-function isNumber(value: unknown): value is number {
+export function isNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function formatMJ(joules: number | null | undefined): string {
+export function formatMJ(joules: number | null | undefined): string {
   return isNumber(joules) ? `${(joules / JOULES_PER_MJ).toFixed(2)} MJ` : DASH;
 }
 
-function formatDistance(meters: number | null | undefined): string {
+export function formatDistance(meters: number | null | undefined): string {
   if (!isNumber(meters)) return DASH;
   if (meters < METERS_PER_KM) return `${Math.round(meters)} m`;
   return `${(meters / METERS_PER_KM).toFixed(2)} km`;
 }
 
 // "2:05" = 2 h 05 min.
-function formatClock(seconds: number | null | undefined): string {
+export function formatClock(seconds: number | null | undefined): string {
   if (!isNumber(seconds)) return DASH;
   const totalMinutes = Math.floor(seconds / SECONDS_PER_MINUTE);
   const hours = Math.floor(totalMinutes / MINUTES_PER_HOUR);
@@ -76,23 +115,15 @@ function formatClock(seconds: number | null | undefined): string {
   return `${hours}:${String(minutes).padStart(2, "0")}`;
 }
 
-function formatDuration(seconds: number | null | undefined): string {
+export function formatDuration(seconds: number | null | undefined): string {
   if (!isNumber(seconds)) return DASH;
   const totalMinutes = Math.round(seconds / SECONDS_PER_MINUTE);
   return `${Math.floor(totalMinutes / MINUTES_PER_HOUR)} h ${String(totalMinutes % MINUTES_PER_HOUR).padStart(2, "0")} min`;
 }
 
-// meta.json `constants` values are the text of the docs/assumptions.md Value column, for example "6 (range 4 to 8)".
-// The number is the leading part. Returns null when the text does not start with a number.
-export function constantNumber(meta: SiteMeta | null, name: string): number | null {
-  const entry = meta?.constants[name];
-  if (!entry) return null;
-  const match = entry.value.trim().match(/^-?\d+(\.\d+)?(e[+-]?\d+)?/i);
-  return match ? Number(match[0]) : null;
-}
 
 // A grey "assumption" tag whose tooltip names each ASSUMPTION constant in `names`, or null if none is one.
-function assumptionTag(meta: SiteMeta | null, names: string[]): HTMLElement | null {
+export function assumptionTag(meta: SiteMeta | null, names: string[]): HTMLElement | null {
   if (!meta) return null;
   const lines: string[] = [];
   for (const name of names) {
@@ -106,7 +137,7 @@ function assumptionTag(meta: SiteMeta | null, names: string[]): HTMLElement | nu
   return tag;
 }
 
-function withTag(node: HTMLElement, tag: HTMLElement | null): HTMLElement {
+export function withTag(node: HTMLElement, tag: HTMLElement | null): HTMLElement {
   if (tag) node.append(" ", tag);
   return node;
 }
@@ -177,8 +208,15 @@ function buildHeader(root: HTMLElement) {
   status.append(dot, text, calc);
   const offline = el("span", "offline-badge", "offline: caching");
   offline.title = "The service worker stores the app and all site data, so the page works without a network after the first load.";
-  root.append(title, status, offline);
-  return { siteName: title.lastElementChild as HTMLElement, status, text, calc, offline };
+  const custom = el("span", "custom-badge", "custom settings");
+  custom.title = "Some assumptions differ from docs/assumptions.md. See About the data.";
+  const about = el("button", "btn", "About the data");
+  about.type = "button";
+  about.addEventListener("click", () => update({ aboutOpen: true }));
+  const right = el("div", "header-right");
+  right.append(custom, about, offline);
+  root.append(title, status, right);
+  return { siteName: title.lastElementChild as HTMLElement, status, text, calc, offline, custom };
 }
 
 function renderHeader(refs: ReturnType<typeof buildHeader>, state: MissionState): void {
@@ -193,6 +231,7 @@ function renderHeader(refs: ReturnType<typeof buildHeader>, state: MissionState)
   refs.offline.classList.toggle("ready", state.offlineReady);
   // Dev server has no service worker: hide the badge instead of showing a state that never changes.
   refs.offline.hidden = import.meta.env.DEV;
+  refs.custom.hidden = Object.keys(state.params).length === 0;
 }
 
 // ---- Left: data layers ----
@@ -219,7 +258,7 @@ function buildLeft(root: HTMLElement, meta: SiteMeta) {
     rows.push({ id, button });
   };
 
-  addRow("basemap", "HiRISE orthophoto", meta.tiles.source, "Color orthophoto mosaic, 0.5 m pixels at full zoom.", null);
+  addRow("basemap", "HiRISE orthophoto", meta.tiles.source, `Color orthophoto mosaic, ${meta.tiles.metersPerPixelAtMaxZoom} m pixels at full zoom.`, null);
   for (const overlay of meta.overlays) {
     let tag: HTMLElement | null = null;
     if (overlay.assumption) {
@@ -276,33 +315,61 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
     buttons.append(button);
     return button;
   };
+  const planScience = makeButton("Plan science stops", () => update({ scienceStatus: "requested" }));
+  planScience.classList.add("primary");
+  planScience.title =
+    "Picks Curiosity stops from habitat to habitat: each step adds the stop with the most science value per added joule, " +
+    "while the plan keeps the energy reserve, the EVA time and the walk radius (docs/data-contract.md, 4.1). " +
+    "Replaces your stops; start and end become the habitat.";
   const setStart = makeButton("Set start", () => update({ placing: getState().placing === "start" ? "stop" : "start" }));
   const setEnd = makeButton("Set end", () => update({ placing: getState().placing === "end" ? "stop" : "end" }));
   makeButton("Start and end at habitat", () => update({ start: null, end: null, placing: "stop" }));
   makeButton("Clear stops", () => update({ stops: [], selectedStop: null }));
+  const scienceNote = el("div", "science-note");
   const startEnd = el("div", "start-end num");
   const stopList = el("ol", "stop-list");
-  plan.append(hint, buttons, startEnd, stopList);
+  const stopDetail = el("figure", "stop-detail");
+  plan.append(hint, buttons, scienceNote, startEnd, stopList, stopDetail);
 
   // Timeline
+  // The slider range is EVA_DURATION_H (a setting), set in renderRight.
   const timeline = section(root, "EVA timeline");
-  const evaHours = constantNumber(meta, "EVA_DURATION_H");
   const sliderRow = el("div", "slider-head");
   const elapsed = el("span", "big-number num", DASH);
-  const total = el("span", "slider-total num", evaHours === null ? `/ ${DASH}` : `/ ${formatClock(evaHours * SECONDS_PER_HOUR)}`);
+  const total = el("span", "slider-total num", `/ ${DASH}`);
   total.title = sourceTooltip(meta, "EVA_DURATION_H");
   sliderRow.append(elapsed, total);
   const slider = el("input", "timeline-slider");
   slider.type = "range";
   slider.min = "0";
   slider.step = String(TIMELINE_STEP_S);
-  slider.max = evaHours === null ? "0" : String(evaHours * SECONDS_PER_HOUR);
-  slider.disabled = evaHours === null;
   slider.setAttribute("aria-label", "Elapsed EVA time");
   slider.addEventListener("input", () => update({ elapsedS: Number(slider.value) }));
   timeline.append(sliderRow, slider);
   const turnBack = statRow(timeline, "Turn back by", assumptionTag(meta, DEPENDS.turnBack));
   const crewAt = statRow(timeline, "Crew A position", assumptionTag(meta, DEPENDS.timeline));
+
+  // Buddy: B walks the same plan, started later. Same scale as the EVA slider: a delay is a stretch of EVA time.
+  const buddyHead = el("div", "slider-head buddy-head");
+  const buddyLabel = el("span", "stat-label", "Buddy B starts later by");
+  const buddyDelay = el("span", "slider-total num", DASH);
+  buddyHead.append(buddyLabel, buddyDelay);
+  const buddySlider = el("input", "timeline-slider");
+  buddySlider.type = "range";
+  buddySlider.min = "0";
+  buddySlider.step = String(TIMELINE_STEP_S);
+  buddySlider.value = "0";
+  buddySlider.setAttribute("aria-label", "Delay of astronaut B behind astronaut A");
+  buddySlider.addEventListener("input", () => update({ buddyDelayS: Number(buddySlider.value) }));
+  timeline.append(buddyHead, buddySlider);
+  const buddyAt = statRow(timeline, "Crew B position", assumptionTag(meta, DEPENDS.timeline));
+  const separation = statRow(timeline, "Buddy separation", assumptionTag(meta, DEPENDS.buddy));
+  separation.title = sourceTooltip(meta, "BUDDY_MAX_SEPARATION_M");
+  // " (limit N m)" after the label text, before the tag. BUDDY_MAX_SEPARATION_M is a setting, so set in renderRight.
+  const separationLimit = el("span");
+  const separationName = separation.previousElementSibling as HTMLElement;
+  separationName.insertBefore(separationLimit, separationName.childNodes[1] ?? null);
+
   const timelineNote = el("div", "note");
   timeline.append(timelineNote);
 
@@ -315,9 +382,10 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
   const planTick = el("div", "budget-plan");
   bar.append(reserve, used, planTick);
   energy.append(budgetHead, bar);
-  const usedValue = statRow(energy, "Used");
-  const remainingValue = statRow(energy, "Remaining");
-  const reserveValue = statRow(energy, "Reserve section");
+  // Used: Santee energy along the plan. Remaining: budget minus used. Reserve: budget x RESERVE_FRACTION.
+  const usedValue = statRow(energy, "Used", assumptionTag(meta, DEPENDS.energy));
+  const remainingValue = statRow(energy, "Remaining", assumptionTag(meta, [...DEPENDS.budget, ...DEPENDS.energy]));
+  const reserveValue = statRow(energy, "Reserve section", assumptionTag(meta, DEPENDS.budget));
   const budgetValue = statRow(energy, "EVA budget", assumptionTag(meta, DEPENDS.budget));
 
   // Route summary
@@ -325,37 +393,71 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
   const verdict = el("div", "verdict");
   verdict.title = "Rules: docs/assumptions.md, section Engine";
   summary.append(verdict);
-  const distance = statRow(summary, "Distance", assumptionTag(meta, DEPENDS.route));
-  const time = statRow(summary, "Time (walking + stops)");
+  const distance = statRow(summary, "Distance", assumptionTag(meta, DEPENDS.routeTotals));
+  const time = statRow(summary, "Time (walking + stops)", assumptionTag(meta, DEPENDS.routeTotals));
   const stopTime = statRow(summary, "Time at stops");
   stopTime.title = sourceTooltip(meta, "STOP_DWELL_MIN");
   const routeEnergy = statRow(summary, "Energy", assumptionTag(meta, DEPENDS.energy));
-  const gain = statRow(summary, "Elevation gain");
+  const gain = statRow(summary, "Elevation gain", assumptionTag(meta, DEPENDS.routeTotals));
   const reasons = el("ul", "reasons");
   summary.append(reasons);
 
-  // Phase 4 placeholders: no logic yet.
-  const next = section(root, "Contingencies");
-  const nextRow = el("div", "button-row");
-  for (const label of ["Simulate solar particle event", "Simulate buddy injured", "Helmet mode"]) {
+  // Contingencies: each button switches its scenario on or off. The event happens at the EVA slider time.
+  const contingencies = section(root, "Contingencies");
+  const scenarioRow = el("div", "button-row");
+  const scenarioButton = (scenario: Scenario, label: string, help: string): HTMLButtonElement => {
     const button = el("button", "btn", label);
     button.type = "button";
-    button.disabled = true;
-    nextRow.append(button);
-  }
-  next.append(nextRow, el("div", "coming-next", "coming next"));
+    button.title = help;
+    button.addEventListener("click", () => update({ scenario: getState().scenario === scenario ? "none" : scenario }));
+    scenarioRow.append(button);
+    return button;
+  };
+  const sepButton = scenarioButton(
+    "sep_event",
+    "Simulate solar particle event",
+    "Solar particle alert at the slider time: both crewmembers go to the full shelter that the later of the two reaches first.",
+  );
+  const injuredButton = scenarioButton(
+    "buddy_injured",
+    "Simulate buddy injured",
+    "Crewmember B is injured at the slider time. A walks to B, then carries B (both masses as load, rescue speed) to the habitat or a rover pickup zone.",
+  );
+  const helmet = el("button", "btn", "Helmet mode");
+  helmet.type = "button";
+  helmet.title = "High-contrast crew display with quick commands and spoken answers. Esc to leave.";
+  helmet.addEventListener("click", () => update({ helmet: true }));
+  scenarioRow.append(helmet);
+  const contingencyBody = el("div", "contingency-body");
+  contingencies.append(scenarioRow, contingencyBody);
+  const action = statRow(contingencyBody, "Recommended action");
+  const target = statRow(contingencyBody, "Target");
+  const actionTime = statRow(contingencyBody, "Time to target");
+  const actionEnergy = statRow(contingencyBody, "Energy for the action", assumptionTag(meta, DEPENDS.energy));
+  const scenarioTag = el("div", "scenario-tag");
+  const contingencyNotes = el("ul", "reasons");
+  contingencyBody.append(scenarioTag, contingencyNotes);
 
   return {
     meta,
     hint,
+    planScience,
+    scienceNote,
     setStart,
     setEnd,
     startEnd,
     stopList,
+    stopDetail,
     elapsed,
     slider,
     turnBack,
     crewAt,
+    buddyDelay,
+    buddySlider,
+    buddyAt,
+    separation,
+    separationLimit,
+    total,
     timelineNote,
     reserve,
     used,
@@ -371,6 +473,15 @@ function buildRight(root: HTMLElement, meta: SiteMeta) {
     routeEnergy,
     gain,
     reasons,
+    sepButton,
+    injuredButton,
+    contingencyBody,
+    action,
+    target,
+    actionTime,
+    actionEnergy,
+    scenarioTag,
+    contingencyNotes,
   };
 }
 
@@ -398,6 +509,9 @@ function renderRight(refs: ReturnType<typeof buildRight>, state: MissionState, p
     refs.setEnd.classList.toggle("active", state.placing === "end");
   }
 
+  const scienceChanged = changed("scienceStatus") || changed("sciencePlan") || changed("scienceError") || changed("stops");
+  if (scienceChanged || changed("engine")) renderScience(refs, state);
+
   if (changed("start") || changed("end")) {
     refs.startEnd.textContent = `Start: ${cellLabel(meta, state.start, "habitat")}  |  End: ${cellLabel(meta, state.end, "habitat")}`;
   }
@@ -417,6 +531,19 @@ function renderRight(refs: ReturnType<typeof buildRight>, state: MissionState, p
       refs.stopList.append(item);
     });
     if (state.stops.length === 0) refs.stopList.append(el("li", "empty", "No stops yet"));
+    renderStopDetail(refs, state);
+  }
+
+  if (changed("params")) {
+    const evaHours = paramNumber(state, "EVA_DURATION_H");
+    const maxS = evaHours === null ? 0 : evaHours * SECONDS_PER_HOUR;
+    refs.total.textContent = evaHours === null ? `/ ${DASH}` : `/ ${formatClock(maxS)}`;
+    for (const slider of [refs.slider, refs.buddySlider]) {
+      slider.max = String(maxS);
+      slider.disabled = evaHours === null;
+    }
+    const limitM = paramNumber(state, "BUDDY_MAX_SEPARATION_M");
+    refs.separationLimit.textContent = limitM === null ? "" : ` (limit ${limitM} m)`;
   }
 
   // Timeline. Do not move the slider under the user's pointer.
@@ -424,12 +551,23 @@ function renderRight(refs: ReturnType<typeof buildRight>, state: MissionState, p
     refs.elapsed.textContent = formatClock(state.elapsedS);
     if (document.activeElement !== refs.slider) refs.slider.value = String(state.elapsedS);
   }
+  if (changed("buddyDelayS")) {
+    refs.buddyDelay.textContent = formatClock(state.buddyDelayS);
+    if (document.activeElement !== refs.buddySlider) refs.buddySlider.value = String(state.buddyDelayS);
+  }
   if (changed("envelope") || changed("crewCell") || changed("sim") || changed("timelineError")) {
     const turnBackS = state.envelope ? state.envelope.turnBackAtS : null;
     refs.turnBack.textContent = formatClock(turnBackS);
     const mustReturn = isNumber(turnBackS) && state.elapsedS >= turnBackS;
     refs.turnBack.classList.toggle("warn", mustReturn);
     refs.crewAt.textContent = cellLabel(meta, state.crewCell, DASH);
+    const buddy = state.sim ? state.sim.astronauts.find((astronaut) => astronaut.id === "B") : undefined;
+    refs.buddyAt.textContent = cellLabel(meta, buddy ? buddy.cell : null, DASH);
+    // The engine adds the separation warning line itself (sim.warnings); here the number turns amber too.
+    const separationM = state.sim ? state.sim.separationM : null;
+    const limitM = paramNumber(state, "BUDDY_MAX_SEPARATION_M");
+    refs.separation.textContent = formatDistance(separationM);
+    refs.separation.classList.toggle("warn", isNumber(separationM) && isNumber(limitM) && separationM > limitM);
     const lines: string[] = [];
     if (state.timelineError) lines.push(`Walk-back area not available: ${state.timelineError}`);
     if (state.sim) lines.push(...state.sim.warnings);
@@ -442,7 +580,7 @@ function renderRight(refs: ReturnType<typeof buildRight>, state: MissionState, p
     const remainingJ = state.envelope ? state.envelope.remainingJ : null;
     const usedJ = state.usedJ;
     const budgetJ = isNumber(remainingJ) && isNumber(usedJ) ? remainingJ + usedJ : null;
-    const reserveFraction = constantNumber(meta, "RESERVE_FRACTION");
+    const reserveFraction = paramNumber(state, "RESERVE_FRACTION");
     const reserveJ = isNumber(budgetJ) && isNumber(reserveFraction) ? budgetJ * reserveFraction : null;
 
     refs.usedValue.textContent = formatMJ(usedJ);
@@ -464,6 +602,92 @@ function renderRight(refs: ReturnType<typeof buildRight>, state: MissionState, p
   }
 
   if (changed("route") || changed("routeError")) renderRouteSummary(refs, state.route, state.routeError);
+  if (changed("scenario") || changed("contingency") || changed("contingencyError")) renderContingency(refs, state);
+}
+
+const ACTION_TEXT: Record<SimState["recommendedAction"], string> = {
+  continue: "Continue the plan",
+  return: "Return to the habitat",
+  go_to_shelter: "Go to the shelter",
+  go_to_rover_pickup: "Go to the rover pickup zone",
+};
+
+function renderContingency(refs: ReturnType<typeof buildRight>, state: MissionState): void {
+  refs.sepButton.classList.toggle("active", state.scenario === "sep_event");
+  refs.injuredButton.classList.toggle("active", state.scenario === "buddy_injured");
+  refs.sepButton.setAttribute("aria-pressed", String(state.scenario === "sep_event"));
+  refs.injuredButton.setAttribute("aria-pressed", String(state.scenario === "buddy_injured"));
+  refs.contingencyBody.hidden = state.scenario === "none";
+  refs.contingencyNotes.replaceChildren();
+  refs.scenarioTag.replaceChildren();
+
+  const sim = state.contingency;
+  if (!sim) {
+    for (const value of [refs.action, refs.target, refs.actionTime, refs.actionEnergy]) value.textContent = DASH;
+    if (state.contingencyError) refs.contingencyNotes.append(el("li", "", state.contingencyError));
+    return;
+  }
+
+  // In "buddy_injured", "return" means A carries B to the habitat.
+  const carrying = sim.scenario === "buddy_injured" && sim.recommendedAction !== "continue";
+  let actionText = ACTION_TEXT[sim.recommendedAction];
+  if (carrying) actionText = sim.recommendedAction === "return" ? "Carry B to the habitat" : "Carry B to the rover pickup zone";
+  refs.action.textContent = actionText;
+  refs.target.textContent = sim.actionTargetId ?? "none reachable";
+  const hasPath = sim.actionPath.length > 0;
+  refs.actionTime.textContent = hasPath ? formatDuration(sim.actionTimeS) : DASH;
+  refs.actionEnergy.textContent = hasPath ? formatMJ(sim.actionEnergyJ) : DASH;
+
+  const event = sim.scenario === "sep_event" ? "Solar particle alert" : "Crewmember B injured";
+  const eventLine = el("span", "", `${event} at EVA time ${formatClock(sim.timeS)}. Map: this event's safe area and path.`);
+  const depends = sim.scenario === "sep_event" ? DEPENDS.sepEvent : DEPENDS.rescue;
+  refs.scenarioTag.append(withTag(eventLine, assumptionTag(refs.meta, depends)));
+  for (const warning of sim.warnings) refs.contingencyNotes.append(el("li", "", warning));
+}
+
+// The selected stop, when it is a Curiosity stop: its image from that stop (meta.json waypoint pov) and where it comes from.
+function renderStopDetail(refs: ReturnType<typeof buildRight>, state: MissionState): void {
+  refs.stopDetail.replaceChildren();
+  const stop = state.selectedStop === null ? null : state.stops[state.selectedStop];
+  const waypoint = stop ? refs.meta.waypoints.find((point) => sameCell(point, stop)) : undefined;
+  refs.stopDetail.hidden = !waypoint;
+  if (!waypoint) return;
+  if (waypoint.pov) {
+    const image = el("img");
+    image.src = state.siteUrl + waypoint.pov;
+    image.alt = `Curiosity image taken at ${waypoint.id}`;
+    image.loading = "lazy";
+    refs.stopDetail.append(image);
+  }
+  const caption = el("figcaption");
+  const where = `${waypoint.id}: ${waypoint.name}, rover site ${waypoint.roverSite}, drive ${waypoint.roverDrive}.`;
+  const credits = [waypoint.povCredit ? `Image: ${waypoint.povCredit}.` : "No Curiosity image assigned.", `Position: ${waypoint.source}.`];
+  caption.append(el("span", "", `${where} ${credits.join(" ")}`));
+  const value = el("div", "", `Science value ${waypoint.scienceValue} of ${SCIENCE_VALUE_MAX}`);
+  caption.append(withTag(value, assumptionTag(refs.meta, OVERLAY_DEPENDS.science)));
+  refs.stopDetail.append(caption);
+}
+
+function renderScience(refs: ReturnType<typeof buildRight>, state: MissionState): void {
+  const engineUsable = state.engine.status === "ready" || state.engine.status === "calculating";
+  const busy = state.scienceStatus !== "idle";
+  refs.planScience.disabled = busy || !engineUsable;
+  refs.planScience.textContent = busy ? "Planning science stops..." : "Plan science stops";
+
+  refs.scienceNote.replaceChildren();
+  if (state.scienceError) {
+    refs.scienceNote.append(`Science planner failed: ${state.scienceError}`);
+    return;
+  }
+  const plan = state.sciencePlan;
+  const planIsShown = plan !== null && state.stops === plan.stops;
+  if (!planIsShown) return;
+  if (plan.stopIds.length === 0) {
+    refs.scienceNote.append("No Curiosity stop fits the energy reserve, EVA time and walk radius.");
+    return;
+  }
+  const text = el("span", "", `Science plan: ${plan.stopIds.join(", ")}. Total science value ${plan.totalValue}.`);
+  refs.scienceNote.append(withTag(text, assumptionTag(refs.meta, DEPENDS.science)));
 }
 
 function renderRouteSummary(refs: ReturnType<typeof buildRight>, route: Route | null, routeError: string | null): void {
@@ -618,6 +842,14 @@ function svgNode(tag: string, attrs: Record<string, string | number>, text = "")
   return node;
 }
 
+// SVG text cannot hold the HTML tag: " (assumption)" in the text, and the constant list as a hover <title>.
+function svgLabel(meta: SiteMeta | null, names: string[], attrs: Record<string, string | number>, text: string): SVGElement {
+  const tag = assumptionTag(meta, names);
+  const label = svgNode("text", attrs, tag ? `${text} (assumption)` : text);
+  if (tag) label.append(svgNode("title", {}, tag.title));
+  return label;
+}
+
 function drawProfile(refs: ProfileRefs, state: MissionState): void {
   const svg = refs.svg;
   svg.replaceChildren();
@@ -660,7 +892,7 @@ function drawProfile(refs: ProfileRefs, state: MissionState): void {
   const energyTop = chartHeight + CHART_MARGIN.top;
   const energyBottom = 2 * chartHeight - CHART_MARGIN.bottom;
   const budgetJ = state.envelope && isNumber(state.usedJ) ? state.envelope.remainingJ + state.usedJ : null;
-  const reserveFraction = constantNumber(meta, "RESERVE_FRACTION");
+  const reserveFraction = paramNumber(state, "RESERVE_FRACTION");
   const energyMax = Math.max(route.totalEnergyJ, budgetJ ?? 0) * 1.05 || 1;
   const yEnergy = (j: number): number => energyBottom - (j / energyMax) * (energyBottom - energyTop);
 
@@ -669,8 +901,8 @@ function drawProfile(refs: ProfileRefs, state: MissionState): void {
   svg.append(grid, axes);
 
   // Titles
-  axes.append(svgNode("text", { x: plotLeft, y: elevTop - 8, class: "chart-title" }, "Elevation (m, areoid)"));
-  axes.append(svgNode("text", { x: plotLeft, y: energyTop - 8, class: "chart-title" }, "Cumulative energy (MJ), points at stops"));
+  axes.append(svgLabel(meta, DEPENDS.route, { x: plotLeft, y: elevTop - 8, class: "chart-title" }, "Elevation (m, areoid)"));
+  axes.append(svgLabel(meta, DEPENDS.energy, { x: plotLeft, y: energyTop - 8, class: "chart-title" }, "Cumulative energy (MJ), points at stops"));
 
   // Y gridlines and labels
   for (const tick of niceTicks(elevMin, elevMax, 3)) {
@@ -714,12 +946,12 @@ function drawProfile(refs: ProfileRefs, state: MissionState): void {
   // Budget and reserve limit lines, labeled directly
   if (isNumber(budgetJ)) {
     svg.append(svgNode("line", { class: "limit-line", x1: plotLeft, x2: plotRight, y1: yEnergy(budgetJ), y2: yEnergy(budgetJ) }));
-    svg.append(svgNode("text", { class: "limit-label", x: plotRight - 4, y: yEnergy(budgetJ) - 4 }, "EVA budget"));
+    svg.append(svgLabel(meta, ["EVA_ENERGY_BUDGET_J"], { class: "limit-label", x: plotRight - 4, y: yEnergy(budgetJ) - 4 }, "EVA budget"));
     if (isNumber(reserveFraction)) {
       const limitJ = budgetJ * (1 - reserveFraction);
       svg.append(svgNode("line", { class: "limit-line reserve", x1: plotLeft, x2: plotRight, y1: yEnergy(limitJ), y2: yEnergy(limitJ) }));
       // Below its line: the budget label sits above the budget line, and the two lines are close.
-      svg.append(svgNode("text", { class: "limit-label", x: plotRight - 4, y: yEnergy(limitJ) + 12 }, "Reserve starts"));
+      svg.append(svgLabel(meta, DEPENDS.budget, { class: "limit-label", x: plotRight - 4, y: yEnergy(limitJ) + 12 }, "Reserve starts"));
     }
   }
 
@@ -743,6 +975,8 @@ function drawProfile(refs: ProfileRefs, state: MissionState): void {
   }
 
   // Hover: crosshair across both charts + tooltip with the nearest profile point.
+  const energyTag = assumptionTag(meta, DEPENDS.energy);
+  const energyTagHtml = energyTag ? ` ${energyTag.outerHTML}` : "";
   const crosshair = svgNode("line", { class: "crosshair", x1: 0, x2: 0, y1: elevTop, y2: energyBottom, visibility: "hidden" });
   const hit = svgNode("rect", { class: "hit-area", x: plotLeft, y: elevTop, width: plotRight - plotLeft, height: energyBottom - elevTop });
   svg.append(crosshair, hit);
@@ -759,7 +993,7 @@ function drawProfile(refs: ProfileRefs, state: MissionState): void {
     refs.tooltip.hidden = false;
     refs.tooltip.innerHTML = `<div class="num">${formatDistance(nearest.distanceM)}</div>
       <div>Elevation <span class="num">${nearest.elevationM.toFixed(1)} m</span></div>
-      <div>Energy at last point <span class="num">${formatMJ(energyBefore ? energyBefore.energyJ : null)}</span></div>`;
+      <div>Energy at last point <span class="num">${formatMJ(energyBefore ? energyBefore.energyJ : null)}</span>${energyTagHtml}</div>`;
     const tipLeft = Math.min(x(nearest.distanceM) + 12, width - refs.tooltip.offsetWidth - 4);
     refs.tooltip.style.left = `${tipLeft}px`;
     refs.tooltip.style.top = `${elevTop}px`;

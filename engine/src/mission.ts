@@ -96,7 +96,7 @@ export function planScience(grid: Grid, params: Params, request: ScienceRequest 
       const insertion = cheapestInsertion(tour, c, totalsOf, fits);
       if (!insertion) continue;
       const addedJ = totalsOf(insertion).energyJ - tourJ;
-      const value = candidates[c - 1].scienceValue ?? 0;
+      const value = candidates[c - 1].scienceValue;
       // addedJ includes the stop energy, so it is above 0 whenever STOP_DWELL_MIN is.
       const ratio = addedJ > 0 ? value / addedJ : Infinity;
       if (!best || ratio > best.ratio) best = { tour: insertion, ratio };
@@ -111,7 +111,7 @@ export function planScience(grid: Grid, params: Params, request: ScienceRequest 
     type: "sciencePlan",
     stops,
     stopIds: chosen.map((point) => point.id),
-    totalValue: chosen.reduce((sum, point) => sum + (point.scienceValue ?? 0), 0),
+    totalValue: chosen.reduce((sum, point) => sum + point.scienceValue, 0),
     route: planRoute(grid, params, { stops }),
   };
 }

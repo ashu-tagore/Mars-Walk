@@ -39,10 +39,11 @@ uv pip install -r requirements.txt
 
 python fetch_data.py --config ../sites/gale_boxwork.yaml    download the data (data/raw/, listed in data/manifest.json)
 python prepare.py --config ../sites/gale_boxwork.yaml       build app/public/sites/gale_boxwork/
-pytest                                                      pipeline tests
+python -m pytest                                            pipeline tests (bare pytest fails on Windows in a uv venv)
 
 cd ../engine
 npm install
+npm run typecheck                                           engine type check (source and tests)
 npm test                                                    engine tests
 
 cd ../app

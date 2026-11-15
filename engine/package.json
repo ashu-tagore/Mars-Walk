@@ -6,7 +6,7 @@
   "description": "Routing, walk-back and shelter-time engine. Runs in a Web Worker, no DOM.",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json"
   },
   "devDependencies": {
     "@types/node": "22.15.3",

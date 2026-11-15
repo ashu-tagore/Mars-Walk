@@ -58,6 +58,10 @@ HABITAT_MIN_FLAT_AREA_M2 = 2500.0
 # Walkability (same rule as the engine, so both agree on which points are reachable)
 NO_CORNER_CUTTING = True
 
+# Output files
+TILE_JPEG_QUALITY = 85
+DEM_EAST_STRIP_M = 100
+
 
 def all_constants():
     """All constants above as {name: value}. The status lives in docs/assumptions.md only."""

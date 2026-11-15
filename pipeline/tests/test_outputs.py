@@ -1,4 +1,4 @@
-"""Checks the files prepare.py wrote against docs/data-contract.md (version 8).
+"""Checks the files prepare.py wrote against docs/data-contract.md (version 9).
 
 Run prepare.py first. The tests skip when the site has not been built.
 """
@@ -39,7 +39,7 @@ def test_meta_has_contract_keys(meta):
                 "rowOrder", "noData", "layers", "tiles", "overlays", "habitat", "shelters", "roverPickupZones",
                 "waypoints", "sources", "notes", "constants"]
     assert [key for key in required if key not in meta] == []
-    assert meta["version"] == 8
+    assert meta["version"] == 9
     assert meta["byteOrder"] == "little" and meta["rowOrder"] == "north_to_south"
     assert set(meta["layers"]) == {"elevation", "terrainCost", "shield", "scienceValue", "demQuality"}
 
@@ -166,10 +166,19 @@ def test_each_stop_photo_is_from_that_stop(meta):
     for stop in meta["waypoints"]:
         if stop["pov"] is None:
             continue
-        entry = manifest[f"app/public/sites/{meta['site']}/{stop['pov']}"]
+        entry = manifest[f"data/raw/{stop['pov']}"]  # the original; the web copy has the same file name
         assert (SITE_DIR / stop["pov"]).exists(), stop["id"]
         assert stop["povCredit"] == entry["credit"], stop["id"]
         assert entry["sol"] == stop["sol"], stop["id"]
+
+
+def test_manifest_lists_only_existing_downloads():
+    """REVIEW.md F-11: the manifest tracks downloads in data/raw/ only, and each one is on disk."""
+    manifest = json.loads((REPO_ROOT / "data" / "manifest.json").read_text(encoding="utf-8"))["files"]
+    outside_raw = [key for key in manifest if not key.startswith("data/raw/")]
+    missing = [key for key in manifest if not (REPO_ROOT / key).exists()]
+    assert outside_raw == []
+    assert missing == []
 
 
 def test_only_assigned_photos_are_deployed(meta):

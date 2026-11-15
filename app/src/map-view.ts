@@ -11,12 +11,15 @@ import { type Envelope, type MissionState, type SiteMeta, addStop, getState, mov
 const ENVELOPE_SAFE_RGBA = [46, 204, 113, 72];
 const ENVELOPE_RESERVE_RGBA = [255, 176, 32, 120];
 
+// docs/assumptions.md, "App display" (reasons there).
 const OVERLAY_OPACITY = 0.75;
 // Leaflet zoom z draws 2^z pixels per meter. -3 shows the whole 3 km site in about 375 px; 4 is 16 px per meter.
 const MAP_MIN_ZOOM = -3;
 const MAP_MAX_ZOOM = 4;
 // Share of the site size the user may pan past the edge.
 const PAN_MARGIN_FRACTION = 0.25;
+// docs/assumptions.md, "Units": the uint8 science value scale (docs/data-contract.md, section 1).
+const SCIENCE_VALUE_MAX = 255;
 
 // A 1 x 1 transparent GIF, shown while there is no envelope.
 const EMPTY_IMAGE = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
@@ -34,7 +37,8 @@ type MapView = {
   routeCore: L.Polyline;
   returnPath: L.Polyline;
   planMarkers: L.LayerGroup;
-  crewMarker: L.Marker;
+  // Astronaut id -> marker, placed from the simulate reply.
+  crewMarkers: Record<"A" | "B", L.Marker>;
 };
 
 export function createMapView(container: HTMLElement): void {
@@ -113,7 +117,11 @@ function buildMap(container: HTMLElement, meta: SiteMeta, siteUrl: string): MapV
 
   const siteMarkers = buildSiteMarkers(meta);
   const planMarkers = L.layerGroup();
-  const crewMarker = L.marker([0, 0], { icon: divIcon("marker-crew", "A", 22), interactive: false, zIndexOffset: 900 });
+  // B below A, so A stays readable when both stand on the same cell.
+  const crewMarkers = {
+    A: L.marker([0, 0], { icon: divIcon("marker-crew", "A", 22), interactive: false, zIndexOffset: 900 }),
+    B: L.marker([0, 0], { icon: divIcon("marker-crew marker-crew-b", "B", 22), interactive: false, zIndexOffset: 850 }),
+  };
   layers.markers = L.layerGroup([siteMarkers, planMarkers]);
 
   map.on("click", (event: L.LeafletMouseEvent) => onMapClick(meta, event.latlng));
@@ -131,7 +139,7 @@ function buildMap(container: HTMLElement, meta: SiteMeta, siteUrl: string): MapV
     routeCore,
     returnPath,
     planMarkers,
-    crewMarker,
+    crewMarkers,
   };
 }
 
@@ -159,6 +167,12 @@ function divIcon(className: string, text: string, sizePx: number): L.DivIcon {
   });
 }
 
+// " (assumption)" when any of the named docs/assumptions.md constants has status ASSUMPTION (tooltips are plain HTML).
+function assumptionNote(meta: SiteMeta, names: string[]): string {
+  const anyAssumption = names.some((name) => meta.constants[name]?.status === "ASSUMPTION");
+  return anyAssumption ? ` (assumption: ${names.join(", ")})` : "";
+}
+
 function tooltip(marker: L.Marker, text: string): L.Marker {
   return marker.bindTooltip(text, { direction: "top", offset: [0, -10], className: "map-tooltip" });
 }
@@ -180,17 +194,18 @@ function buildSiteMarkers(meta: SiteMeta): L.LayerGroup {
       keyboard: false,
       zIndexOffset: 200,
     });
-    const kindText = full ? "Full radiation shelter" : "Partial shielding only";
+    const kindText = full ? `Full radiation shelter${assumptionNote(meta, ["FULL_SHELTERS"])}` : "Partial shielding only";
     tooltip(marker, `${shelter.id}: ${kindText}${shelter.source ? `<br>${shelter.source}` : ""}`).addTo(group);
   }
 
   const habitat = L.marker(cellToLatLng(meta, meta.habitat), { icon: divIcon("marker-habitat", "H", 30), keyboard: false, zIndexOffset: 300 });
-  tooltip(habitat, `Habitat: full radiation shelter, default start and end${meta.habitat.source ? `<br>${meta.habitat.source}` : ""}`).addTo(group);
+  tooltip(habitat, `Habitat: full radiation shelter${assumptionNote(meta, ["FULL_SHELTERS"])}, default start and end${meta.habitat.source ? `<br>${meta.habitat.source}` : ""}`).addTo(group);
 
   // Curiosity stops: click to add one as a route stop on its exact cell.
+  const scienceNote = assumptionNote(meta, ["SCIENCE_WEIGHT_SULFATE", "SCIENCE_WEIGHT_RIDGE", "RIDGE_RADIUS_M"]);
   for (const waypoint of meta.waypoints) {
     const marker = L.marker(cellToLatLng(meta, waypoint), { icon: divIcon("marker-waypoint", waypoint.id, 26), zIndexOffset: 100 });
-    tooltip(marker, `${waypoint.name}<br>Science value ${waypoint.scienceValue} of 255<br>Click to add as a stop`);
+    tooltip(marker, `${waypoint.name}<br>Science value ${waypoint.scienceValue} of ${SCIENCE_VALUE_MAX}${scienceNote}<br>Click to add as a stop`);
     marker.on("click", () => addStop({ col: waypoint.col, row: waypoint.row }));
     marker.addTo(group);
   }
@@ -211,11 +226,12 @@ function render(view: MapView, state: MissionState, previous: MissionState | nul
     // Keep the drawing order fixed whatever the toggle order: overlays, envelope, then route and markers.
     view.envelopeOverlay.bringToFront();
   }
-  if (changed("envelope")) drawEnvelope(view, state.envelope);
+  // During a contingency the map shows its envelope and action path instead of the normal ones.
+  if (changed("envelope") || changed("contingency")) drawEnvelope(view, state.contingency ? state.contingency.envelope : state.envelope);
   if (changed("route")) drawRoute(view, state);
-  if (changed("sim")) drawReturnPath(view, state);
+  if (changed("sim") || changed("contingency")) drawReturnPath(view, state);
   if (changed("stops") || changed("start") || changed("end") || changed("selectedStop")) drawPlanMarkers(view, state);
-  if (changed("crewCell") || changed("layers")) drawCrew(view, state);
+  if (changed("sim") || changed("layers")) drawCrew(view, state);
   if (changed("placing")) view.map.getContainer().dataset.placing = state.placing;
 }
 
@@ -261,9 +277,11 @@ function drawRoute(view: MapView, state: MissionState): void {
   view.routeCore.setLatLngs(points);
 }
 
-// The engine's return path from the crew position to the habitat (simulate "none", actionPath).
+// The engine's action path for crew A (simulate actionPath): the way home with no event, else the way to the shelter
+// or the rescue walk and carry.
 function drawReturnPath(view: MapView, state: MissionState): void {
-  const path = state.sim ? state.sim.actionPath : [];
+  const sim = state.contingency ?? state.sim;
+  const path = sim ? sim.actionPath : [];
   view.returnPath.setLatLngs(path.map((cell) => cellToLatLng(view.meta, cell)));
 }
 
@@ -307,11 +325,15 @@ function drawPlanMarkers(view: MapView, state: MissionState): void {
 }
 
 function drawCrew(view: MapView, state: MissionState): void {
-  const visible = state.crewCell !== null && state.layers.markers === true;
-  if (!visible) {
-    view.crewMarker.remove();
-    return;
+  for (const id of ["A", "B"] as const) {
+    const marker = view.crewMarkers[id];
+    const astronaut = state.sim ? state.sim.astronauts.find((item) => item.id === id) : undefined;
+    const visible = astronaut !== undefined && state.layers.markers === true;
+    if (!visible) {
+      marker.remove();
+      continue;
+    }
+    marker.setLatLng(cellToLatLng(view.meta, astronaut.cell));
+    if (!view.map.hasLayer(marker)) marker.addTo(view.map);
   }
-  view.crewMarker.setLatLng(cellToLatLng(view.meta, state.crewCell as Cell));
-  if (!view.map.hasLayer(view.crewMarker)) view.crewMarker.addTo(view.map);
 }

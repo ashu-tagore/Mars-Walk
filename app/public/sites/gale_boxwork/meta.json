@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "site": "gale_boxwork",
   "name": "Mount Sharp boxwork, Gale Crater",
   "width": 1000,
@@ -67,9 +67,9 @@
       "id": "slope",
       "file": "overlays/slope.png",
       "label": "Slope limits",
-      "description": "Amber: 15 to 20 deg (caution penalty). Red: above 20 deg (impassable). Slope of 3 m cells from the 1 m DEM.",
+      "description": "Amber: 15 to 20 deg (caution penalty). Red: above 20 deg (impassable). Slope of 3 m cells from the 1 m DEM. Cell size and penalty are assumptions.",
       "source": "NASA/JPL-Caltech/UArizona; Parker and Calef (2016), USGS Astrogeology",
-      "assumption": false
+      "assumption": true
     },
     {
       "id": "boulders",
@@ -654,6 +654,16 @@
       "status": "ASSUMPTION",
       "source": "Habitat = most interior cell of the flat zone (>= 50 m x 50 m) nearest the AOI center. The site YAML can override it (habitat_lat, habitat_lon)"
     },
+    "TILE_JPEG_QUALITY": {
+      "value": "85",
+      "status": "ASSUMPTION",
+      "source": "JPEG quality of the basemap tiles: a balance of file size (offline cache) and detail. Display only"
+    },
+    "DEM_EAST_STRIP_M": {
+      "value": "100",
+      "status": "ASSUMPTION",
+      "source": "Width of the east strip where the Phase 0 check saw stripe and seam signs (columns about 2900 to 3000, docs/datasets.md, section 1). Used only to report the DEM quality test result in meta.json `notes`"
+    },
     "EVA_ENERGY_BUDGET_J": {
       "value": "EVA_DURATION_H * AVG_METABOLIC_KJ_PER_H * 1000 = 7.596e6 J",
       "status": "ASSUMPTION",
@@ -678,6 +688,51 @@
       "value": "60",
       "status": "DEFINITION",
       "source": "Unit conversion"
+    },
+    "MINUTES_PER_HOUR": {
+      "value": "60",
+      "status": "DEFINITION",
+      "source": "Unit conversion (SECONDS_PER_HOUR / SECONDS_PER_MINUTE) (added 2026-11-15)"
+    },
+    "JOULES_PER_MJ": {
+      "value": "1e6",
+      "status": "DEFINITION",
+      "source": "Unit conversion (added 2026-11-15)"
+    },
+    "METERS_PER_KM": {
+      "value": "1000",
+      "status": "DEFINITION",
+      "source": "Unit conversion (added 2026-11-15)"
+    },
+    "SCIENCE_VALUE_MAX": {
+      "value": "255",
+      "status": "DEFINITION",
+      "source": "Top of the science value scale: science_val.bin and waypoint scienceValue are uint8 0 to 255 (docs/data-contract.md, section 1) (added 2026-11-15)"
+    },
+    "TIMELINE_STEP_S": {
+      "value": "60",
+      "status": "ASSUMPTION",
+      "source": "EVA time slider step: one minute. Display choice"
+    },
+    "OVERLAY_OPACITY": {
+      "value": "0.75",
+      "status": "ASSUMPTION",
+      "source": "Opacity of the meta.json overlays, so the basemap stays visible below. Display choice"
+    },
+    "MAP_MIN_ZOOM": {
+      "value": "-3",
+      "status": "ASSUMPTION",
+      "source": "Leaflet zoom z draws 2^z pixels per meter: -3 shows the 3 km site in about 375 px. Display choice"
+    },
+    "MAP_MAX_ZOOM": {
+      "value": "4",
+      "status": "ASSUMPTION",
+      "source": "16 px per meter, past the 0.5 m orthophoto pixels. Display choice"
+    },
+    "PAN_MARGIN_FRACTION": {
+      "value": "0.25",
+      "status": "ASSUMPTION",
+      "source": "Share of the site size the user may pan past the edge. Display choice"
     }
   }
 }

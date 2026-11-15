@@ -25,11 +25,12 @@ jobs:
         with:
           node-version: 22
 
-      # The CLAUDE.md engine tests must pass before the app ships.
-      - name: Engine tests
+      # The CLAUDE.md engine tests must pass before the app ships. typecheck covers the source and the tests.
+      - name: Engine typecheck and tests
         working-directory: engine
         run: |
           npm ci
+          npm run typecheck
           npm test
 
       - name: Install app dependencies

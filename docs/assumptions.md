@@ -167,6 +167,13 @@ Rover parking (a full shelter): the pickup zone nearest the middle of the scienc
 Pickup zones and stops must be reachable on foot from the habitat, using the engine's edge rules: 8-connected passable cells,
 no edge steeper than MAX_SLOPE_DEG, and NO_CORNER_CUTTING (section "Engine"). The pipeline uses NO_CORNER_CUTTING too. Rover driving access is not modeled.
 
+### Output files (added 2026-11-15, REVIEW.md F-03)
+
+| Name | Value | Status | Source / reason |
+|---|---|---|---|
+| TILE_JPEG_QUALITY | 85 | ASSUMPTION | JPEG quality of the basemap tiles: a balance of file size (offline cache) and detail. Display only |
+| DEM_EAST_STRIP_M | 100 | ASSUMPTION | Width of the east strip where the Phase 0 check saw stripe and seam signs (columns about 2900 to 3000, docs/datasets.md, section 1). Used only to report the DEM quality test result in meta.json `notes` |
+
 ## Engine (Phase 2, added 2026-11-14, decisions of the project owner)
 
 Values in engine/src/constants.ts.
@@ -204,3 +211,19 @@ Values in engine/src/constants.ts.
 |---|---|---|---|
 | SECONDS_PER_HOUR | 3600 | DEFINITION | Unit conversion |
 | SECONDS_PER_MINUTE | 60 | DEFINITION | Unit conversion |
+| MINUTES_PER_HOUR | 60 | DEFINITION | Unit conversion (SECONDS_PER_HOUR / SECONDS_PER_MINUTE) (added 2026-11-15) |
+| JOULES_PER_MJ | 1e6 | DEFINITION | Unit conversion (added 2026-11-15) |
+| METERS_PER_KM | 1000 | DEFINITION | Unit conversion (added 2026-11-15) |
+| SCIENCE_VALUE_MAX | 255 | DEFINITION | Top of the science value scale: science_val.bin and waypoint scienceValue are uint8 0 to 255 (docs/data-contract.md, section 1) (added 2026-11-15) |
+
+## App display (added 2026-11-15, REVIEW.md F-03)
+
+Values in /app. They set how the map and panels look and respond. They do not change any computed number.
+
+| Name | Value | Status | Source / reason |
+|---|---|---|---|
+| TIMELINE_STEP_S | 60 | ASSUMPTION | EVA time slider step: one minute. Display choice |
+| OVERLAY_OPACITY | 0.75 | ASSUMPTION | Opacity of the meta.json overlays, so the basemap stays visible below. Display choice |
+| MAP_MIN_ZOOM | -3 | ASSUMPTION | Leaflet zoom z draws 2^z pixels per meter: -3 shows the 3 km site in about 375 px. Display choice |
+| MAP_MAX_ZOOM | 4 | ASSUMPTION | 16 px per meter, past the 0.5 m orthophoto pixels. Display choice |
+| PAN_MARGIN_FRACTION | 0.25 | ASSUMPTION | Share of the site size the user may pan past the edge. Display choice |

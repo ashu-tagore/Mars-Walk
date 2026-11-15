@@ -1,4 +1,4 @@
-"""Write the pipeline output in the format of docs/data-contract.md (version 8).
+"""Write the pipeline output in the format of docs/data-contract.md (version 9).
 
 .bin layers, meta.json, orthophoto tile pyramid and display overlays.
 """
@@ -13,13 +13,12 @@ import numpy as np
 import rasterio
 from PIL import Image
 
-from constants import CAUTION_SLOPE_DEG, MAX_SLOPE_DEG, ROUTING_CELL_SIZE_M
+from constants import CAUTION_SLOPE_DEG, DEM_EAST_STRIP_M, MAX_SLOPE_DEG, ROUTING_CELL_SIZE_M, TILE_JPEG_QUALITY
 
-CONTRACT_VERSION = 8
+CONTRACT_VERSION = 9
 NO_DATA_FLOAT = -9999.0
 TILE_SIZE = 256
-TILE_JPEG_QUALITY = 85
-DEM_EAST_STRIP_M = 100  # the strip the Phase 0 check found (docs/datasets.md, section 1); used only to report the test result
+THEMIS_MANIFEST_KEY = "data/raw/themis_day_aoi.tif"
 ASSUMPTIONS_PATH = Path(__file__).resolve().parent.parent / "docs" / "assumptions.md"
 # A named table row: | NAME | value | status | source or reason |
 ASSUMPTION_ROW = re.compile(r"^\| ([A-Z][A-Z0-9_]+) \| (.+?) \| (.+?) \| (.+) \|$", re.M)
@@ -119,7 +118,7 @@ def save_png(rgba, path):
     Image.fromarray(rgba, "RGBA").save(path, optimize=True)
 
 
-def write_overlays(site_dir, grids, crism_info, credits):
+def write_overlays(site_dir, grids, crism_info, credits, themis_pixel_m):
     overlay_dir = site_dir / "overlays"
     if overlay_dir.exists():
         shutil.rmtree(overlay_dir)
@@ -155,14 +154,14 @@ def write_overlays(site_dir, grids, crism_info, credits):
     return [
         {"id": "slope", "file": "overlays/slope.png", "label": "Slope limits",
          "description": f"Amber: {CAUTION_SLOPE_DEG} to {MAX_SLOPE_DEG} deg (caution penalty). Red: above {MAX_SLOPE_DEG} deg (impassable). "
-                        f"Slope of {ROUTING_CELL_SIZE_M:g} m cells from the 1 m DEM.",
-         "source": credits["dem"], "assumption": False},
+                        f"Slope of {ROUTING_CELL_SIZE_M:g} m cells from the 1 m DEM. Cell size and penalty are assumptions.",
+         "source": credits["dem"], "assumption": True},
         {"id": "boulders", "file": "overlays/boulders.png", "label": "Boulder shadows",
          "description": "Compact dark blobs in the orthophoto, kept as boulder shadows. Long thin shadows (ridges) are rejected. "
                         "Detection floor about 1.5 m. Thresholds are assumptions.",
          "source": credits["ortho"], "assumption": True},
         {"id": "thermal", "file": "overlays/thermal.png", "label": "THEMIS day IR",
-         "description": "Daytime infrared brightness (about 163 m pixels). Image brightness, not calibrated temperature. Display only.",
+         "description": f"Daytime infrared brightness (about {themis_pixel_m:.0f} m pixels). Image brightness, not calibrated temperature. Display only.",
          "source": credits["themis"], "assumption": False},
         {"id": "crism_sulfate", "file": "overlays/crism_sulfate.png", "label": f"CRISM {crism_info['band']} (sulfate)",
          "description": f"Sulfate index from {crism_info['file']} (about {crism_info['pixelM']:g} m pixels), stretched min to max in the AOI.",
@@ -194,7 +193,7 @@ def build_sources(manifest, crism_info):
         "dem": ("Elevation (1 m DEM)", "data/raw/dem_aoi.tif"),
         "ortho": ("Orthophoto basemap", "data/raw/ortho_aoi.tif"),
         "crism": ("CRISM summary parameters", f"data/raw/crism/{crism_info['file']}"),
-        "themis": ("THEMIS day IR", "data/raw/themis_day_aoi.tif"),
+        "themis": ("THEMIS day IR", THEMIS_MANIFEST_KEY),
         "waypoints": ("Curiosity stops (location map)", "data/raw/msl_waypoints.json"),
     }
     sources = []
@@ -226,7 +225,7 @@ def assumption_table(text):
     return table
 
 
-def build_notes(grids, crism_info):
+def build_notes(grids, crism_info, themis_pixel_m):
     quality = grids["quality"].astype(bool)
     width = quality.shape[1]
     strip_cols = int(round(DEM_EAST_STRIP_M / ROUTING_CELL_SIZE_M))
@@ -243,7 +242,7 @@ def build_notes(grids, crism_info):
         {"id": "boulder_floor",
          "text": "Boulders smaller than about 1.5 m cannot be seen in HiRISE images. The boulder layer misses them."},
         {"id": "thermal_brightness",
-         "text": "THEMIS layer: image brightness at about 163 m per pixel, not calibrated temperature. Display only."},
+         "text": f"THEMIS layer: image brightness at about {themis_pixel_m:.0f} m per pixel, not calibrated temperature. Display only."},
         {"id": "crism_resolution",
          "text": f"CRISM sulfate index ({crism_info['band']}) has about {crism_info['pixelM']:g} m pixels: one value covers many routing cells."},
         {"id": "shield_edge",
@@ -267,10 +266,10 @@ def build_waypoints(config, sites, site_dir, manifest):
         pov, credit = None, None
         file_name = assignments.get(stop["id"])
         if file_name:
-            key = f"app/public/sites/{config['site']}/pov/{file_name}"
+            # The web copy has the original's file name; its credit and sol are on the original's manifest entry.
             if not (site_dir / "pov" / file_name).exists():
-                raise RuntimeError(f"pov_assignments: {key} does not exist")
-            entry = manifest_entry(manifest, key)
+                raise RuntimeError(f"pov_assignments: web copy pov/{file_name} does not exist (run fetch_data.py --only stop_pov)")
+            entry = manifest_entry(manifest, f"data/raw/pov/{file_name}")
             # Stop ids follow the selection order. If the stops change, an old assignment would show the wrong place.
             if entry.get("sol") is not None and entry["sol"] != stop["sol"]:
                 raise RuntimeError(f"pov_assignments: {file_name} is from sol {entry['sol']}, but {stop['id']} is sol {stop['sol']}")
@@ -307,7 +306,9 @@ def write_site(site_dir, config, grids, sites, grid_transform, crs_wkt, crism_in
     credits = {s["id"]: s["credit"] for s in sources}
     tiles, tile_count = write_tiles(Path(__file__).resolve().parent.parent / "data" / "raw" / "ortho_aoi.tif", site_dir / "tiles")
     tiles["source"] = credits["ortho"]
-    overlays = write_overlays(site_dir, grids, crism_info, credits)
+    # Measured by fetch_data.py when it clipped the mosaic, so the text follows the data.
+    themis_pixel_m = manifest_entry(manifest, THEMIS_MANIFEST_KEY)["pixel_size_m"]
+    overlays = write_overlays(site_dir, grids, crism_info, credits, themis_pixel_m)
 
     t = grid_transform
     meta = {
@@ -340,7 +341,7 @@ def write_site(site_dir, config, grids, sites, grid_transform, crs_wkt, crism_in
         "roverPickupZones": [{"id": p["id"], **point(p["cell"]), "areaM2": p["areaM2"]} for p in sites["pickups"]],
         "waypoints": build_waypoints(config, sites, site_dir, manifest),
         "sources": sources,
-        "notes": build_notes(grids, crism_info),
+        "notes": build_notes(grids, crism_info, themis_pixel_m),
         "constants": assumption_table(ASSUMPTIONS_PATH.read_text(encoding="utf-8")),
     }
     (site_dir / "meta.json").write_text(json.dumps(meta, indent=2), encoding="utf-8", newline="\n")

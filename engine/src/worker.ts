@@ -7,6 +7,7 @@ import {
   Route,
   ShelterTimes,
   applyParams,
+  checkRuntimeParams,
   defaultParams,
   planRoute,
   shelterTimes,
@@ -50,7 +51,9 @@ export async function handleMessage(state: EngineState, message: EngineMessage):
       return { type: "siteLoaded", width: state.grid.width, height: state.grid.height };
     }
     if (request === "setParams") {
-      state.params = applyParams(state.params, payload.params ?? {});
+      const changes = payload.params ?? {};
+      checkRuntimeParams(changes);
+      state.params = applyParams(state.params, changes);
       return { type: "paramsSet" };
     }
     if (request === "planRoute") {

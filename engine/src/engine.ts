@@ -123,6 +123,17 @@ export function applyParams(params: Params, changes: Record<string, unknown>): P
   return next;
 }
 
+// Also fixed in terrain_cost.bin (impassable cells, caution penalty). A setParams change would make the edge rule
+// disagree with the cell costs, so setParams rejects them (docs/data-contract.md, version 9). Tests may still set them
+// with applyParams on a fixture whose cell costs match.
+export const SITE_FILE_PARAMS = ["MAX_SLOPE_DEG", "CAUTION_SLOPE_DEG"];
+
+export function checkRuntimeParams(changes: Record<string, unknown>): void {
+  const fixed = Object.keys(changes).filter((name) => SITE_FILE_PARAMS.includes(name));
+  if (fixed.length === 0) return;
+  throw new Error(`${fixed.join(", ")}: fixed in terrain_cost.bin. Change docs/assumptions.md and run the pipeline again`);
+}
+
 export function energyBudgetJ(params: Params): number {
   if (params.EVA_ENERGY_BUDGET_J !== null) return params.EVA_ENERGY_BUDGET_J;
   return params.EVA_DURATION_H * params.AVG_METABOLIC_KJ_PER_H * 1000;

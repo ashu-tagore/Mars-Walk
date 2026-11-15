@@ -198,7 +198,7 @@ describe("planScience", () => {
     const params = defaultParams();
     const ratio = (i: number) => {
       const point = grid.meta.waypoints[i];
-      return point.scienceValue! / planRoute(grid, params, { stops: [point] }).totalEnergyJ;
+      return point.scienceValue /planRoute(grid, params, { stops: [point] }).totalEnergyJ;
     };
     const expected = ratio(0) > ratio(1) ? "s1" : "s2";
     expect(planScience(grid, params, { maxStops: 1 }).stopIds).toEqual([expected]);

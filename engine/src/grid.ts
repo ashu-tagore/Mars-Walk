@@ -1,20 +1,43 @@
 // Load the pipeline output (docs/data-contract.md, sections 1 and 2) into typed arrays.
 
 // docs/data-contract.md "version". The engine reads only this meta.json version.
-export const CONTRACT_VERSION = 8;
+export const CONTRACT_VERSION = 9;
 
 export type Cell = { col: number; row: number };
 
-export type LayerInfo = { file: string; type: string; scale?: number; impassable?: number };
+export type LayerInfo = {
+  file: string;
+  type: string;
+  scale?: number;
+  impassable?: number;
+  units?: string;
+  values?: Record<string, string>;
+};
 
 export type SitePoint = { id: string; col: number; row: number };
 
+export type OverlayInfo = {
+  id: string;
+  file: string;
+  label: string;
+  description: string;
+  source: string;
+  assumption: boolean;
+};
+
+export type ConstantEntry = { value: string; status: "SOURCED" | "ASSUMPTION" | "DEFINITION"; source: string };
+
+// docs/data-contract.md, section 2. The one type for meta.json; the app re-exports it.
 export type Meta = {
   version: number;
   site: string;
+  name: string;
   width: number;
   height: number;
   cellSizeMeters: number;
+  crs: string;
+  transform: number[];
+  bounds: { west: number; south: number; east: number; north: number };
   byteOrder: string;
   rowOrder: string;
   noData: number;
@@ -25,10 +48,33 @@ export type Meta = {
     scienceValue: LayerInfo;
     demQuality: LayerInfo;
   };
-  habitat: Cell;
-  shelters: (SitePoint & { kind: "full" | "partial" })[];
+  tiles: {
+    path: string;
+    tileSize: number;
+    minZoom: number;
+    maxZoom: number;
+    metersPerPixelAtMaxZoom: number;
+    widthPx: number;
+    heightPx: number;
+    source: string;
+  };
+  overlays: OverlayInfo[];
+  habitat: Cell & { source?: string };
+  shelters: (SitePoint & { kind: "full" | "partial"; source?: string })[];
   roverPickupZones: (SitePoint & { areaM2: number })[];
-  waypoints: (SitePoint & { name?: string; scienceValue?: number })[];
+  waypoints: (SitePoint & {
+    name: string;
+    scienceValue: number;
+    sol: number;
+    roverSite: number;
+    roverDrive: number;
+    source: string;
+    pov: string | null;
+    povCredit: string | null;
+  })[];
+  sources: { id: string; label: string; credit: string; url: string }[];
+  notes: { id: string; text: string }[];
+  constants: Record<string, ConstantEntry>;
 };
 
 export type Grid = {
@@ -41,8 +87,6 @@ export type Grid = {
   terrainCost: Uint8Array;
   terrainScale: number;
   impassable: number;
-  shield: Uint8Array;
-  scienceValue: Uint8Array;
   demQuality: Uint8Array;
   // Smallest passable terrain multiplier in the grid. A* needs it for a heuristic that never overestimates.
   minTerrainMultiplier: number;
@@ -118,14 +162,17 @@ export function parseSite(meta: Meta, files: Record<string, ArrayBuffer>): Grid 
     terrainCost,
     terrainScale,
     impassable,
-    shield: readUint8(files[layers.shield.file], count, layers.shield.file),
-    scienceValue: readUint8(files[layers.scienceValue.file], count, layers.scienceValue.file),
     demQuality: readUint8(files[layers.demQuality.file], count, layers.demQuality.file),
     minTerrainMultiplier: minCostByte * terrainScale,
   };
 }
 
-type FetchFn = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown>; arrayBuffer(): Promise<ArrayBuffer> }>;
+// The layers the engine reads. shield.bin and science_val.bin are not loaded (2 MB): the planner ranks the meta.json
+// waypoints, and shelterTimes returns only the meta.json full shelters. Terrain partial shelters from shield.bin
+// need a rule and a contract change first (docs/data-contract.md, section 4; docs/build-plan.md, Phase 2).
+const ENGINE_LAYERS = ["elevation", "terrainCost", "demQuality"] as const;
+
+type FetchFn =(url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown>; arrayBuffer(): Promise<ArrayBuffer> }>;
 
 export async function loadSite(siteUrl: string, fetchFn: FetchFn = fetch): Promise<Grid> {
   const base = siteUrl.endsWith("/") ? siteUrl : siteUrl + "/";
@@ -135,7 +182,8 @@ export async function loadSite(siteUrl: string, fetchFn: FetchFn = fetch): Promi
   const meta = (await metaResponse.json()) as Meta;
 
   const files: Record<string, ArrayBuffer> = {};
-  for (const layer of Object.values(meta.layers)) {
+  for (const name of ENGINE_LAYERS) {
+    const layer = meta.layers[name];
     const response = await fetchFn(base + layer.file);
     if (!response.ok) throw new Error(`${layer.file}: HTTP ${response.status}`);
     files[layer.file] = await response.arrayBuffer();

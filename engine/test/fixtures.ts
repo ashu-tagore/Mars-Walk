@@ -60,8 +60,22 @@ function terrainCostFromSlope(elevation: Float32Array, width: number, height: nu
   return cost;
 }
 
-function buildMeta(width: number, height: number, points: Pick<Meta, "habitat" | "shelters" | "roverPickupZones" | "waypoints">): Meta {
-  const meta = {
+// The fixture's own waypoint fields. buildMeta adds the Curiosity fields (sol, source, pov...) with fixture values.
+type FixtureWaypoint = { id: string; col: number; row: number; name: string; scienceValue: number };
+
+type FixturePoints = Pick<Meta, "habitat" | "shelters" | "roverPickupZones"> & { waypoints: FixtureWaypoint[] };
+
+function buildMeta(width: number, height: number, points: FixturePoints): Meta {
+  const waypoints = points.waypoints.map((point) => ({
+    ...point,
+    sol: 0,
+    roverSite: 0,
+    roverDrive: 0,
+    source: "synthetic test fixture",
+    pov: null,
+    povCredit: null,
+  }));
+  const meta: Meta = {
     version: CONTRACT_VERSION,
     site: "fixture",
     name: "Synthetic test grid (not Mars data)",
@@ -81,13 +95,27 @@ function buildMeta(width: number, height: number, points: Pick<Meta, "habitat" |
       scienceValue: { file: "science_val.bin", type: "uint8" },
       demQuality: { file: "dem_quality.bin", type: "uint8", values: { "0": "normal", "1": "low_confidence" } },
     },
+    // No basemap tiles exist for a fixture. These fields only satisfy the type; no test reads them.
+    tiles: {
+      path: "tiles/{z}/{x}/{y}.jpg",
+      tileSize: 256,
+      minZoom: 0,
+      maxZoom: 0,
+      metersPerPixelAtMaxZoom: CELL_M,
+      widthPx: width,
+      heightPx: height,
+      source: "synthetic test fixture",
+    },
     overlays: [],
+    habitat: points.habitat,
+    shelters: points.shelters,
+    roverPickupZones: points.roverPickupZones,
+    waypoints,
     sources: [],
     notes: [{ id: "fixture", text: "Synthetic test grid. Not Mars data." }],
     constants: {},
-    ...points,
   };
-  return meta as Meta;
+  return meta;
 }
 
 function packFiles(meta: Meta, elevation: Float32Array, cost: Uint8Array, shield: Uint8Array, science: Uint8Array, quality: Uint8Array): SiteFiles {

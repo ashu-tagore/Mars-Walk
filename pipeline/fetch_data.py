@@ -567,10 +567,11 @@ def to_web_jpeg(src_path, dest_path):
 
 
 def save_pov(manifest, raw_path, web_path, url, credit, **extra):
+    # Only the download goes in the manifest (docs/datasets.md). The web copy is a build product with the same file
+    # name: prepare.py deletes the unused ones, so a manifest entry for it would point at a missing file.
     add_to_manifest(manifest, raw_path, url, credit, **extra)
     if not web_path.exists() or web_path.stat().st_mtime < raw_path.stat().st_mtime:
         to_web_jpeg(raw_path, web_path)
-    add_to_manifest(manifest, web_path, url, credit, derived_from=rel(raw_path), max_width_px=POV_MAX_WIDTH_PX, **extra)
 
 
 def save_raw_image(manifest, item, raw_dir, web_dir, **extra):
