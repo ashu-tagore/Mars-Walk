@@ -1,0 +1,30 @@
+# CLAUDE.md: data/raw/ is gitignored. Every file in it is listed in data/manifest.json.
+data/raw/
+
+pipeline/.venv/
+__pycache__/
+.pytest_cache/
+node_modules/
+
+# Local notes and agent instructions, kept out of the repo.
+/docs/*
+!/docs/assumptions.md
+/learning/
+/CLAUDE.md
+/REVIEW.md
+
+# Build and test output. app/public/sites is NOT ignored: the Pages deploy builds from it.
+dist/
+coverage/
+*.tsbuildinfo
+*.py[cod]
+
+# Local environment, logs, editor and OS files.
+.env
+.env.*
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

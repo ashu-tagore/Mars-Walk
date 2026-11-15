@@ -1,0 +1,45 @@
+# Site configuration read by pipeline/fetch_data.py and pipeline/prepare.py.
+# Leave center_lat / center_lon empty to let fetch_data.py try to derive them
+# from Curiosity's 2025 waypoints. The human must check the result in QGIS.
+
+site: gale_boxwork
+name: "Mount Sharp boxwork, Gale Crater"
+
+center_lat: -4.800956   # degrees, negative = south. DERIVED by fetch_data.py: mean of 84 waypoints, sols 4470-4700. Confirm in QGIS.
+center_lon: 137.383685   # degrees east
+size_m: 3000
+
+# Boxwork campaign sol range (2025). Adjust after checking the traverse.
+aoi_sol_min: 4470
+aoi_sol_max: 4700
+
+ortho_resolution_m: 0.5
+routing_cell_size_m: 3.0
+
+max_pov_images: 40
+photojournal_ids:
+  - PIA26559   # Curiosity's first 360-degree view of boxwork
+  - PIA26552   # Mastcam panorama, March 2025
+  - PIA26306   # HiRISE view of the boxwork
+
+optional:
+  crism: true
+  themis: true
+
+# Phase 1 (prepare.py). Leave empty to use the pipeline rules in docs/assumptions.md.
+# habitat_lat:          # degrees; habitat cell override
+# habitat_lon:
+# rover_lat:            # degrees; rover parking (full shelter) override
+# rover_lon:
+# pov_assignments:      # stop id (from meta.json waypoints; each is a real Curiosity stop with its sol) -> file name in app/public/sites/<site>/pov/
+pov_assignments:      # chosen by the project owner on 2026-11-14 (wide views, taken at each stop)
+  s1: NLB_806661651EDR_F1172730NCAM00267M_.jpg   # sol 4609
+  s2: NLB_796812825EDR_F1142292NCAM00282M_.jpg   # sol 4498
+  s3: NLB_811979432EDR_F1190198NCAM00291M_.jpg   # sol 4669
+  s4: NLB_804534112EDR_F1170702NCAM00286M_.jpg   # sol 4585
+  s5: NLB_794593481EDR_F1140288NCAM00297M_.jpg   # sol 4473
+  s6: NLB_801783699EDR_F1161806NCAM00258M_.jpg   # sol 4554
+  s7: NLB_799387216EDR_F1152232NCAM00271M_.jpg   # sol 4527
+
+# fetch_data.py --only stop_pov: left Navcam images taken at each science stop (run prepare.py first).
+stop_pov_per_stop: 6

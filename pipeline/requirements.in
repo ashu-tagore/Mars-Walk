@@ -1,0 +1,11 @@
+# Direct dependencies, pinned to the versions tested with Python 3.11 on 2026-11-14.
+# Edit this file, then rebuild the full lock in requirements.txt:
+#   uv pip compile requirements.in --universal --python-version 3.11 -o requirements.txt
+rasterio==1.4.4
+numpy==2.4.6
+pyyaml==6.0.3
+requests==2.34.2
+pyproj==3.7.2
+pillow==13.0.0
+scipy==1.17.1
+pytest==9.2.0

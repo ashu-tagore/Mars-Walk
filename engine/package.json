@@ -1,0 +1,16 @@
+{
+  "name": "boxwork-engine",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Routing, walk-back and shelter-time engine. Runs in a Web Worker, no DOM.",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

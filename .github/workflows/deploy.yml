@@ -1,0 +1,62 @@
+# Builds /app and deploys it to GitHub Pages. Steps for the repository owner: README.md, "Deploy".
+name: Deploy app to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The CLAUDE.md engine tests must pass before the app ships.
+      - name: Engine tests
+        working-directory: engine
+        run: |
+          npm ci
+          npm test
+
+      - name: Install app dependencies
+        working-directory: app
+        run: npm ci
+
+      - name: App tests (coords)
+        working-directory: app
+        run: npm test
+
+      # A project site is served at https://<owner>.github.io/<repo>/, so every URL needs that prefix.
+      - name: Build app
+        working-directory: app
+        env:
+          VITE_BASE: /${{ github.event.repository.name }}/
+        run: npm run build
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

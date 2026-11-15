@@ -1,0 +1,683 @@
+{
+  "version": 8,
+  "site": "gale_boxwork",
+  "name": "Mount Sharp boxwork, Gale Crater",
+  "width": 1000,
+  "height": 1000,
+  "cellSizeMeters": 3.0,
+  "crs": "+proj=eqc +lat_ts=0 +lat_0=0 +lon_0=0 +x_0=0 +y_0=0 +R=3396190 +units=m +no_defs=True",
+  "transform": [
+    3.0,
+    0.0,
+    8141876.492786024,
+    0.0,
+    -3.0,
+    -283075.075189438
+  ],
+  "bounds": {
+    "west": 8141876.492786024,
+    "south": -286075.075189438,
+    "east": 8144876.492786024,
+    "north": -283075.075189438
+  },
+  "byteOrder": "little",
+  "rowOrder": "north_to_south",
+  "noData": -9999.0,
+  "layers": {
+    "elevation": {
+      "file": "elevation.bin",
+      "type": "float32",
+      "units": "m (areoid)"
+    },
+    "terrainCost": {
+      "file": "terrain_cost.bin",
+      "type": "uint8",
+      "scale": 0.1,
+      "impassable": 255
+    },
+    "shield": {
+      "file": "shield.bin",
+      "type": "uint8"
+    },
+    "scienceValue": {
+      "file": "science_val.bin",
+      "type": "uint8"
+    },
+    "demQuality": {
+      "file": "dem_quality.bin",
+      "type": "uint8",
+      "values": {
+        "0": "normal",
+        "1": "low_confidence"
+      }
+    }
+  },
+  "tiles": {
+    "path": "tiles/{z}/{x}/{y}.jpg",
+    "tileSize": 256,
+    "minZoom": 0,
+    "maxZoom": 5,
+    "metersPerPixelAtMaxZoom": 0.5,
+    "widthPx": 6000,
+    "heightPx": 6000,
+    "source": "NASA/JPL-Caltech/UArizona; Calef and Parker (2016), USGS Astrogeology"
+  },
+  "overlays": [
+    {
+      "id": "slope",
+      "file": "overlays/slope.png",
+      "label": "Slope limits",
+      "description": "Amber: 15 to 20 deg (caution penalty). Red: above 20 deg (impassable). Slope of 3 m cells from the 1 m DEM.",
+      "source": "NASA/JPL-Caltech/UArizona; Parker and Calef (2016), USGS Astrogeology",
+      "assumption": false
+    },
+    {
+      "id": "boulders",
+      "file": "overlays/boulders.png",
+      "label": "Boulder shadows",
+      "description": "Compact dark blobs in the orthophoto, kept as boulder shadows. Long thin shadows (ridges) are rejected. Detection floor about 1.5 m. Thresholds are assumptions.",
+      "source": "NASA/JPL-Caltech/UArizona; Calef and Parker (2016), USGS Astrogeology",
+      "assumption": true
+    },
+    {
+      "id": "thermal",
+      "file": "overlays/thermal.png",
+      "label": "THEMIS day IR",
+      "description": "Daytime infrared brightness (about 163 m pixels). Image brightness, not calibrated temperature. Display only.",
+      "source": "NASA/JPL-Caltech/ASU",
+      "assumption": false
+    },
+    {
+      "id": "crism_sulfate",
+      "file": "overlays/crism_sulfate.png",
+      "label": "CRISM SINDEX2 (sulfate)",
+      "description": "Sulfate index from frt000058a3_07_su165j_mtr3.img (about 18 m pixels), stretched min to max in the AOI.",
+      "source": "NASA/JPL-Caltech/JHU-APL",
+      "assumption": false
+    },
+    {
+      "id": "science",
+      "file": "overlays/science.png",
+      "label": "Science value",
+      "description": "Weighted sum of the normalized CRISM sulfate index and the boxwork ridge score. Weights are assumptions.",
+      "source": "NASA/JPL-Caltech/JHU-APL; NASA/JPL-Caltech/UArizona; Parker and Calef (2016), USGS Astrogeology",
+      "assumption": true
+    },
+    {
+      "id": "shield",
+      "file": "overlays/shield.png",
+      "label": "Terrain sky cover",
+      "description": "Where terrain blocks part of the sky (zenith-weighted). Partial shielding only: only the habitat and the rover are full shelters.",
+      "source": "NASA/JPL-Caltech/UArizona; Parker and Calef (2016), USGS Astrogeology",
+      "assumption": true
+    },
+    {
+      "id": "dem_quality",
+      "file": "overlays/dem_quality.png",
+      "label": "Low-confidence DEM",
+      "description": "Cells where a measured test finds stripes that follow the DEM pixel columns (a mosaic artifact, not terrain). Threshold is an assumption.",
+      "source": "NASA/JPL-Caltech/UArizona; Parker and Calef (2016), USGS Astrogeology",
+      "assumption": true
+    }
+  ],
+  "habitat": {
+    "col": 502,
+    "row": 534,
+    "source": "pipeline rule (ASSUMPTION): most interior cell of the flat zone (slope < 5 deg, area >= 2500 m2) nearest the AOI center"
+  },
+  "shelters": [
+    {
+      "id": "habitat",
+      "col": 502,
+      "row": 534,
+      "kind": "full"
+    },
+    {
+      "id": "rover",
+      "col": 520,
+      "row": 433,
+      "kind": "full",
+      "source": "pipeline rule (ASSUMPTION): rover parked at the pickup zone nearest the middle of the science stops"
+    }
+  ],
+  "roverPickupZones": [
+    {
+      "id": "rp1",
+      "col": 950,
+      "row": 897,
+      "areaM2": 21222.0
+    },
+    {
+      "id": "rp2",
+      "col": 757,
+      "row": 132,
+      "areaM2": 18639.0
+    },
+    {
+      "id": "rp3",
+      "col": 520,
+      "row": 433,
+      "areaM2": 18162.0
+    },
+    {
+      "id": "rp4",
+      "col": 475,
+      "row": 191,
+      "areaM2": 14499.0
+    },
+    {
+      "id": "rp5",
+      "col": 580,
+      "row": 115,
+      "areaM2": 13032.0
+    },
+    {
+      "id": "rp6",
+      "col": 924,
+      "row": 612,
+      "areaM2": 12078.0
+    }
+  ],
+  "waypoints": [
+    {
+      "col": 413,
+      "row": 574,
+      "id": "s1",
+      "name": "Curiosity stop, sol 4609",
+      "scienceValue": 116,
+      "sol": 4609,
+      "roverSite": 117,
+      "roverDrive": 2730,
+      "source": "NASA/JPL-Caltech (Curiosity location map, MMGIS)",
+      "pov": "pov/NLB_806661651EDR_F1172730NCAM00267M_.jpg",
+      "povCredit": "NASA/JPL-Caltech"
+    },
+    {
+      "col": 622,
+      "row": 354,
+      "id": "s2",
+      "name": "Curiosity stop, sol 4498",
+      "scienceValue": 108,
+      "sol": 4498,
+      "roverSite": 114,
+      "roverDrive": 2292,
+      "source": "NASA/JPL-Caltech (Curiosity location map, MMGIS)",
+      "pov": "pov/NLB_796812825EDR_F1142292NCAM00282M_.jpg",
+      "povCredit": "NASA/JPL-Caltech"
+    },
+    {
+      "col": 444,
+      "row": 640,
+      "id": "s3",
+      "name": "Curiosity stop, sol 4669",
+      "scienceValue": 101,
+      "sol": 4669,
+      "roverSite": 119,
+      "roverDrive": 198,
+      "source": "NASA/JPL-Caltech (Curiosity location map, MMGIS)",
+      "pov": "pov/NLB_811979432EDR_F1190198NCAM00291M_.jpg",
+      "povCredit": "NASA/JPL-Caltech"
+    },
+    {
+      "col": 447,
+      "row": 531,
+      "id": "s4",
+      "name": "Curiosity stop, sol 4585",
+      "scienceValue": 84,
+      "sol": 4585,
+      "roverSite": 117,
+      "roverDrive": 702,
+      "source": "NASA/JPL-Caltech (Curiosity location map, MMGIS)",
+      "pov": "pov/NLB_804534112EDR_F1170702NCAM00286M_.jpg",
+      "povCredit": "NASA/JPL-Caltech"
+    },
+    {
+      "col": 649,
+      "row": 300,
+      "id": "s5",
+      "name": "Curiosity stop, sol 4473",
+      "scienceValue": 67,
+      "sol": 4473,
+      "roverSite": 114,
+      "roverDrive": 288,
+      "source": "NASA/JPL-Caltech (Curiosity location map, MMGIS)",
+      "pov": "pov/NLB_794593481EDR_F1140288NCAM00297M_.jpg",
+      "povCredit": "NASA/JPL-Caltech"
+    },
+    {
+      "col": 495,
+      "row": 475,
+      "id": "s6",
+      "name": "Curiosity stop, sol 4554",
+      "scienceValue": 65,
+      "sol": 4554,
+      "roverSite": 116,
+      "roverDrive": 1806,
+      "source": "NASA/JPL-Caltech (Curiosity location map, MMGIS)",
+      "pov": "pov/NLB_801783699EDR_F1161806NCAM00258M_.jpg",
+      "povCredit": "NASA/JPL-Caltech"
+    },
+    {
+      "col": 575,
+      "row": 426,
+      "id": "s7",
+      "name": "Curiosity stop, sol 4527",
+      "scienceValue": 60,
+      "sol": 4527,
+      "roverSite": 115,
+      "roverDrive": 2232,
+      "source": "NASA/JPL-Caltech (Curiosity location map, MMGIS)",
+      "pov": "pov/NLB_799387216EDR_F1152232NCAM00271M_.jpg",
+      "povCredit": "NASA/JPL-Caltech"
+    }
+  ],
+  "sources": [
+    {
+      "id": "dem",
+      "label": "Elevation (1 m DEM)",
+      "credit": "NASA/JPL-Caltech/UArizona; Parker and Calef (2016), USGS Astrogeology",
+      "url": "https://planetarymaps.usgs.gov/mosaic/Mars/MSL/MSL_Gale_DEM_Mosaic_1m_v3.tif"
+    },
+    {
+      "id": "ortho",
+      "label": "Orthophoto basemap",
+      "credit": "NASA/JPL-Caltech/UArizona; Calef and Parker (2016), USGS Astrogeology",
+      "url": "https://asc-pds-services.s3.us-west-2.amazonaws.com/mosaic/Mars/MSL/MSL_Gale_HiRISE-LRGB_78quads_sharp_cog.tif"
+    },
+    {
+      "id": "crism",
+      "label": "CRISM summary parameters",
+      "credit": "NASA/JPL-Caltech/JHU-APL",
+      "url": "https://pds-geosciences.wustl.edu/mro/mro-m-crism-5-rdr-mptargeted-v1/mrocr_4001/mtrdr/2007/2007_112/frt000058a3/frt000058a3_07_su165j_mtr3.img"
+    },
+    {
+      "id": "themis",
+      "label": "THEMIS day IR",
+      "credit": "NASA/JPL-Caltech/ASU",
+      "url": "https://api.nasa.gov/mars-wmts/catalog/Mars_MO_THEMIS-IR-Day_mosaic_global_100m_v12_clon0_ly/1.0.0/WMTSCapabilities.xml"
+    },
+    {
+      "id": "waypoints",
+      "label": "Curiosity stops (location map)",
+      "credit": "NASA/JPL-Caltech (Curiosity location map, MMGIS)",
+      "url": "https://mars.nasa.gov/mmgis-maps/MSL/Layers/json/MSL_waypoints.json"
+    },
+    {
+      "id": "rad",
+      "label": "Curiosity RAD radiation values",
+      "credit": "NASA/JPL-Caltech/SwRI",
+      "url": "https://www.nasa.gov/solar-system/planets/mars/nasa-watches-mars-light-up-during-epic-solar-storm/"
+    }
+  ],
+  "notes": [
+    {
+      "id": "dem_east_strip",
+      "text": "DEM quality: the east 100 m of the area showed stripe and seam signs in a Phase 0 check. A measured test (stripes that follow the DEM pixel columns) marks 18% of that strip and 1.4% of the rest of the area as low confidence. Slopes there can be wrong. The test threshold is an assumption."
+    },
+    {
+      "id": "dem_fallback",
+      "text": "The USGS DEM uses CTX or HRSC elevation where HiRISE stereo is missing. Those parts are smoother, so small steep features can be missing."
+    },
+    {
+      "id": "boulder_floor",
+      "text": "Boulders smaller than about 1.5 m cannot be seen in HiRISE images. The boulder layer misses them."
+    },
+    {
+      "id": "thermal_brightness",
+      "text": "THEMIS layer: image brightness at about 163 m per pixel, not calibrated temperature. Display only."
+    },
+    {
+      "id": "crism_resolution",
+      "text": "CRISM sulfate index (SINDEX2) has about 18 m pixels: one value covers many routing cells."
+    },
+    {
+      "id": "shield_edge",
+      "text": "Terrain sky cover counts the sky beyond the edge of the area as open. Terrain gives partial shielding only."
+    },
+    {
+      "id": "ortho_grayscale",
+      "text": "Part of the west edge of the orthophoto is grayscale: HiRISE color is missing there. It is not an error."
+    },
+    {
+      "id": "rover_access",
+      "text": "Rover pickup zones are flat areas the crew can walk to. Rover driving access to them is not modeled (assumption)."
+    }
+  ],
+  "constants": {
+    "MARS_GRAVITY": {
+      "value": "3.73 m/s^2",
+      "status": "SOURCED",
+      "source": "NASA Mars Fact Sheet, mean surface gravity (updated 2025). Was 3.71 (2007 edition) (changed 2026-11-14)"
+    },
+    "ONE_WAY_LIGHT_TIME_MIN": {
+      "value": "3 to 22 min",
+      "status": "SOURCED",
+      "source": "Light time over the Earth-Mars distance, 54.6 to 401 million km. Was 4 to 24 (changed 2026-11-14)"
+    },
+    "ROUTING_CELL_SIZE_M": {
+      "value": "3.0",
+      "status": "ASSUMPTION",
+      "source": "HiRISE DTM effective resolution is about 3x its 1 m post spacing; 1 m slopes are noise"
+    },
+    "MAX_WALK_RADIUS_M": {
+      "value": "2000",
+      "status": "SOURCED",
+      "source": "NASA EVA-EXP-0042 Rev B (2020), p. 38: traverses up to 2 km away from the lander"
+    },
+    "MAX_SLOPE_DEG": {
+      "value": "20",
+      "status": "SOURCED",
+      "source": "NASA EVA-EXP-0042 Rev B (2020), p. 38: walking up/down/across a slope of up to 20 deg"
+    },
+    "CAUTION_SLOPE_DEG": {
+      "value": "15",
+      "status": "SOURCED",
+      "source": "Pena-Asensio et al. 2023, Acta Astronautica (automated Artemis traverses): slopes limited to 15 deg. Not a NASA limit"
+    },
+    "RESCUE_DISTANCE_M": {
+      "value": "2000",
+      "status": "SOURCED",
+      "source": "NASA Lunar Rescue System webinar (NTRS 20250000528, 2025): one crewmember transports an incapacitated crewmember up to 2 km, slopes up to 20 deg"
+    },
+    "EVA_DURATION_H": {
+      "value": "6 (range 4 to 8)",
+      "status": "SOURCED",
+      "source": "NASA EVA-EXP-0042 Rev B (2020), p. 29: EVAs between 4 and 8 hours (6 +/- 2). Adjustable."
+    },
+    "PEAK_METABOLIC_KJ_PER_H": {
+      "value": "2110",
+      "status": "SOURCED",
+      "source": "Apollo PLSS design peak, 2000 BTU/h"
+    },
+    "AVG_METABOLIC_KJ_PER_H": {
+      "value": "1266",
+      "status": "SOURCED",
+      "source": "Apollo PLSS design average, 1200 BTU/h (NASA technical report, NTRS 19720019467). Was 1688 = 1600 BTU/h, a press value (changed 2026-11-14)"
+    },
+    "STOP_DWELL_MIN": {
+      "value": "20",
+      "status": "SOURCED",
+      "source": "Apollo 12, second EVA: seven major stops, \"On average, they had about twenty minutes at each location\" (Apollo Lunar Surface Journal, docs/research.md, section 2.3). One traverse, not a rule. Adjustable. (project owner, 2026-11-14)"
+    },
+    "STATION_WORK_W": {
+      "value": "280",
+      "status": "SOURCED",
+      "source": "Apollo geological station activity, 244 kcal/h = 284 W (Moore, NTRS 19910001262, p. 2, citing Waligora and Horrigan 1975)"
+    },
+    "RESERVE_FRACTION": {
+      "value": "0.20",
+      "status": "ASSUMPTION",
+      "source": "Safety margin kept unused on return. Adjustable."
+    },
+    "BUDDY_MAX_SEPARATION_M": {
+      "value": "100",
+      "status": "ASSUMPTION",
+      "source": "No Mars rule published. Adjustable."
+    },
+    "CAUTION_SLOPE_PENALTY": {
+      "value": "1.5",
+      "status": "ASSUMPTION",
+      "source": "Extra cost multiplier for 15-20 deg cells"
+    },
+    "ASTRONAUT_MASS_KG": {
+      "value": "80",
+      "status": "ASSUMPTION",
+      "source": "Typical body mass"
+    },
+    "SUIT_AND_GEAR_MASS_KG": {
+      "value": "120",
+      "status": "ASSUMPTION",
+      "source": "Suit + life support + tools. No Mars suit exists yet. Adjustable. NASA designs its lunar rescue device for up to 342 kg (755 lb) crew + suit; the project owner kept 80 + 120 = 200 kg (2026-11-14)"
+    },
+    "WALK_SPEED_M_PER_S": {
+      "value": "1.1",
+      "status": "SOURCED",
+      "source": "Norcross et al., NASA/TP-2010-216115, p. 56: site-to-site walking 1.1 to 1.4 m/s (lunar). Lower end chosen. Was 0.9, no source found (changed 2026-11-14)"
+    },
+    "RESCUE_SPEED_M_PER_S": {
+      "value": "0.5",
+      "status": "ASSUMPTION",
+      "source": "Slower pace while carrying a crewmember. Adjustable."
+    },
+    "SANTEE_LEVEL_MASS_COEF": {
+      "value": "3.28",
+      "status": "SOURCED",
+      "source": "Santee et al. 2001, W_level mass coefficient (W/kg), via Johnson et al. 2010, Table 2"
+    },
+    "SANTEE_LEVEL_OFFSET_W": {
+      "value": "71.1",
+      "status": "SOURCED",
+      "source": "Santee et al. 2001, W_level offset (W), via Johnson et al. 2010, Table 2"
+    },
+    "SANTEE_LEVEL_SPEED_COEF": {
+      "value": "0.661",
+      "status": "SOURCED",
+      "source": "Santee et al. 2001, W_level speed coefficient (s/m), via Johnson et al. 2010, Table 2"
+    },
+    "SANTEE_LEVEL_BASE": {
+      "value": "0.115",
+      "status": "SOURCED",
+      "source": "Santee et al. 2001, W_level constant term, via Johnson et al. 2010, Table 2"
+    },
+    "SANTEE_UPHILL_COEF": {
+      "value": "3.5",
+      "status": "SOURCED",
+      "source": "Santee et al. 2001, W_up coefficient, via Johnson et al. 2010, Table 2"
+    },
+    "SANTEE_DOWNHILL_COEF": {
+      "value": "2.4",
+      "status": "SOURCED",
+      "source": "Santee et al. 2001, W_down coefficient, via Johnson et al. 2010, Table 2"
+    },
+    "SANTEE_DOWNHILL_DECAY_BASE": {
+      "value": "0.3",
+      "status": "SOURCED",
+      "source": "Santee et al. 2001, W_down decay base, via Johnson et al. 2010, Table 2"
+    },
+    "SANTEE_DOWNHILL_DECAY_DEG": {
+      "value": "7.65",
+      "status": "SOURCED",
+      "source": "Santee et al. 2001, W_down decay angle (deg), via Johnson et al. 2010, Table 2"
+    },
+    "SANTEE_MIN_LEVEL_FRACTION": {
+      "value": "0.5",
+      "status": "ASSUMPTION",
+      "source": "Floor W_total >= W_level * 0.5. Not in the source: it stops steep downhill edges from giving near-zero cost"
+    },
+    "METABOLIC_MODEL_AT_MARS_GRAVITY": {
+      "value": "Santee et al. 2001 with g = MARS_GRAVITY",
+      "status": "ASSUMPTION",
+      "source": "The model was fitted on Earth (treadmill, about 1.34 m/s). Limited validation at reduced gravity (docs/research.md, section 2.5)"
+    },
+    "GCR_DOSE_MSV_PER_DAY": {
+      "value": "0.64 (+/- 0.12)",
+      "status": "SOURCED",
+      "source": "Hassler et al., Science 2014 (Curiosity RAD)"
+    },
+    "SEP_MAY2024_TOTAL_UGY": {
+      "value": "8100",
+      "status": "SOURCED",
+      "source": "NASA release, June 2024: about 8,100 micrograys beside Curiosity for the 20 May 2024 event (a total, not a rate)"
+    },
+    "SEP_ARRIVAL": {
+      "value": "tens of minutes",
+      "status": "SOURCED",
+      "source": "NASA release, June 2024: the charged particles reached Mars in tens of minutes"
+    },
+    "SEP_SHELTER_TARGET_MIN": {
+      "value": "30",
+      "status": "ASSUMPTION",
+      "source": "Warn when the crew needs longer than this to reach a full shelter. 30 min = the lower end of the 30 to 60 min particle onset after the 2013-2014 flares (docs/research.md, section 2.6). SEP_ARRIVAL gives no exact number. Adjustable. (project owner, 2026-11-14)"
+    },
+    "TERRAIN_SHIELD_MODEL": {
+      "value": "zenith-weighted sky view",
+      "status": "ASSUMPTION",
+      "source": "Low-angle particles cross more atmosphere, so overhead sky matters most"
+    },
+    "FULL_SHELTERS": {
+      "value": "habitat, rover",
+      "status": "ASSUMPTION",
+      "source": "Terrain is partial shielding only"
+    },
+    "ROUGHNESS_DETREND_SIGMA_M": {
+      "value": "2.0",
+      "status": "ASSUMPTION",
+      "source": "Gaussian sigma removed from the 1 m DEM before roughness is measured, so the cell slope does not count as roughness"
+    },
+    "ROUGHNESS_COST_PER_M": {
+      "value": "0.5",
+      "status": "ASSUMPTION",
+      "source": "Multiplier = 1 + this * roughness RMS (m). AOI median RMS is about 0.15 m, so the median cell costs about 7% more than smooth ground. No published Mars value. Adjustable."
+    },
+    "ROUGHNESS_MAX_FACTOR": {
+      "value": "1.5",
+      "status": "ASSUMPTION",
+      "source": "Cap on the roughness factor"
+    },
+    "BOULDER_COST_FACTOR": {
+      "value": "1.3",
+      "status": "ASSUMPTION",
+      "source": "Extra cost for a cell with a detected boulder shadow (walk around or over blocks). Adjustable."
+    },
+    "BOULDER_LOCAL_WINDOW_M": {
+      "value": "25",
+      "status": "ASSUMPTION",
+      "source": "Window for the local mean brightness, so dark sand does not count as shadow"
+    },
+    "BOULDER_SHADOW_DARKNESS": {
+      "value": "0.6",
+      "status": "ASSUMPTION",
+      "source": "Shadow pixel = darker than 0.6 x local mean. Checked by eye on two 200 m crops."
+    },
+    "BOULDER_MIN_SHADOW_AREA_M2": {
+      "value": "1.0",
+      "status": "ASSUMPTION",
+      "source": "4 pixels. Matches the ~1.5 m detection floor (see Data limits)"
+    },
+    "BOULDER_MAX_SHADOW_AREA_M2": {
+      "value": "25",
+      "status": "ASSUMPTION",
+      "source": "Larger dark blobs are outcrop or scarp shadows"
+    },
+    "BOULDER_MAX_ELONGATION": {
+      "value": "2.5",
+      "status": "ASSUMPTION",
+      "source": "Ratio of principal axes. Build plan: keep compact roundish blobs, reject long thin ridge shadows"
+    },
+    "SHIELD_AZIMUTHS": {
+      "value": "16",
+      "status": "ASSUMPTION",
+      "source": "Directions used to find the horizon"
+    },
+    "SHIELD_SEARCH_RADIUS_M": {
+      "value": "300",
+      "status": "ASSUMPTION",
+      "source": "Horizon search distance. Terrain outside the AOI counts as open sky. Open sky share per direction = cos^2(horizon angle) (TERRAIN_SHIELD_MODEL)."
+    },
+    "DEM_QUALITY_COLUMN_RUN_M": {
+      "value": "151",
+      "status": "ASSUMPTION",
+      "source": "Run length down a column. Real ridges drift off a pixel column within this distance"
+    },
+    "DEM_QUALITY_WINDOW_M": {
+      "value": "30",
+      "status": "ASSUMPTION",
+      "source": "Averaging window of the coherence score"
+    },
+    "DEM_QUALITY_COHERENCE_MIN": {
+      "value": "0.42",
+      "status": "ASSUMPTION",
+      "source": "Threshold, just below the artifact median (0.46)"
+    },
+    "DEM_QUALITY_MIN_AREA_M2": {
+      "value": "1800",
+      "status": "ASSUMPTION",
+      "source": "200 cells. Smaller flagged patches are dropped as noise"
+    },
+    "SCIENCE_WEIGHT_SULFATE": {
+      "value": "0.5",
+      "status": "ASSUMPTION",
+      "source": "Weight of normalized CRISM SINDEX2 (band 42 of the summary-parameter product, read from the label)"
+    },
+    "SCIENCE_WEIGHT_RIDGE": {
+      "value": "0.5",
+      "status": "ASSUMPTION",
+      "source": "Weight of the boxwork ridge score"
+    },
+    "RIDGE_RADIUS_M": {
+      "value": "15",
+      "status": "ASSUMPTION",
+      "source": "Ridge score = height above the mean of the cells within this radius (0 if below)"
+    },
+    "SCIENCE_NORMALIZE_LOW_PERCENTILE": {
+      "value": "2",
+      "status": "ASSUMPTION",
+      "source": "Each part is stretched 0..1 between these AOI percentiles"
+    },
+    "SCIENCE_NORMALIZE_HIGH_PERCENTILE": {
+      "value": "99.5",
+      "status": "ASSUMPTION",
+      "source": "Same. Was 98: the top stops then all scored 255 and could not be ranked (project owner chose 99.5 on 2026-11-14)"
+    },
+    "SCIENCE_STOP_COUNT": {
+      "value": "12",
+      "status": "ASSUMPTION",
+      "source": "Maximum stops in meta.json waypoints. Stops are real Curiosity stops (sols aoi_sol_min to aoi_sol_max), highest science value first. With the spacing below, 7 fit on the 2025 track"
+    },
+    "SCIENCE_STOP_MIN_SPACING_M": {
+      "value": "150",
+      "status": "ASSUMPTION",
+      "source": "Minimum distance between candidate stops, and from the habitat"
+    },
+    "ROVER_PICKUP_MAX_SLOPE_DEG": {
+      "value": "5",
+      "status": "ASSUMPTION",
+      "source": "Flat cell for a rover pickup (Data limits, \"Contingency recovery\"). Also used for the habitat site"
+    },
+    "ROVER_PICKUP_MIN_AREA_M2": {
+      "value": "900",
+      "status": "ASSUMPTION",
+      "source": "Flat zone must be at least 30 m x 30 m"
+    },
+    "ROVER_PICKUP_MAX_COUNT": {
+      "value": "6",
+      "status": "ASSUMPTION",
+      "source": "Largest zones first"
+    },
+    "ROVER_PICKUP_MIN_SPACING_M": {
+      "value": "300",
+      "status": "ASSUMPTION",
+      "source": "Spread the zones over the area"
+    },
+    "HABITAT_MIN_FLAT_AREA_M2": {
+      "value": "2500",
+      "status": "ASSUMPTION",
+      "source": "Habitat = most interior cell of the flat zone (>= 50 m x 50 m) nearest the AOI center. The site YAML can override it (habitat_lat, habitat_lon)"
+    },
+    "EVA_ENERGY_BUDGET_J": {
+      "value": "EVA_DURATION_H * AVG_METABOLIC_KJ_PER_H * 1000 = 7.596e6 J",
+      "status": "ASSUMPTION",
+      "source": "Walk-back budget. Using the design average rate as a whole-EVA energy budget is our choice. Adjustable with setParams."
+    },
+    "NO_CORNER_CUTTING": {
+      "value": "true",
+      "status": "ASSUMPTION",
+      "source": "A diagonal move is allowed only when both side neighbours are passable, so a route cannot slip diagonally through an impassable band"
+    },
+    "TURN_BACK_MODEL": {
+      "value": "remaining energy spent at STATION_WORK_W while the crew stays at `position`",
+      "status": "ASSUMPTION",
+      "source": "Formula below"
+    },
+    "SECONDS_PER_HOUR": {
+      "value": "3600",
+      "status": "DEFINITION",
+      "source": "Unit conversion"
+    },
+    "SECONDS_PER_MINUTE": {
+      "value": "60",
+      "status": "DEFINITION",
+      "source": "Unit conversion"
+    }
+  }
+}
