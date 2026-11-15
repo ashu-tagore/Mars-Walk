@@ -1,6 +1,6 @@
-// "About the data and assumptions" dialog (docs/data-contract.md, section 2; docs/assumptions.md).
-// Shows meta.json `sources` and `notes`, every ASSUMPTION constant with its reason, and the settings form for the
-// values docs/assumptions.md marks "Adjustable". The form only writes `params` to the store; the engine client sends
+// The About page (docs/data-contract.md, section 2; docs/assumptions.md): a full-screen editorial page over the map.
+// Shows how the planner works, meta.json `sources` and `notes`, every ASSUMPTION constant with its reason, and the
+// settings form for the values docs/assumptions.md marks "Adjustable". The form only writes `params` to the store; the engine client sends
 // them with setParams, so every number on screen is recalculated by the engine.
 
 import { JOULES_PER_MJ, SECONDS_PER_HOUR } from "./panels";
@@ -64,39 +64,102 @@ function applyInput(setting: Setting, raw: string): void {
 }
 
 export function createAbout(container: HTMLElement): void {
-  const backdrop = el("div", "about-backdrop");
-  backdrop.hidden = true;
-  backdrop.addEventListener("click", (event) => {
-    if (event.target === backdrop) update({ aboutOpen: false });
-  });
-  const dialog = el("div", "about");
-  dialog.setAttribute("role", "dialog");
-  dialog.setAttribute("aria-label", "About the data and assumptions");
-  backdrop.append(dialog);
-  container.append(backdrop);
+  const page = el("div", "about-page");
+  page.hidden = true;
+  page.setAttribute("role", "dialog");
+  page.setAttribute("aria-modal", "true");
+  page.setAttribute("aria-label", "About the data and assumptions");
+  container.append(page);
 
-  const close = el("button", "btn", "Close");
+  const bar = el("div", "about-bar");
+  const name = el("span", "about-bar-name", "Boxwork EVA Navigator");
+  const close = el("button", "mw-btn mw-btn-primary", "Back to the map");
   close.type = "button";
   close.addEventListener("click", () => update({ aboutOpen: false }));
-  const head = el("div", "about-head");
-  head.append(el("h2", "about-title", "About the data and assumptions"), close);
+  bar.append(name, close);
   const body = el("div", "about-body");
-  dialog.append(head, body);
+  page.append(bar, body);
 
   let built = false;
   const inputs = new Map<string, HTMLInputElement>();
   const docsValues = new Map<string, HTMLElement>();
   const settingsNote = el("div", "note");
+  const reveal = createReveal(page);
 
   const build = (state: MissionState): void => {
     const meta = state.meta;
     if (!meta) return;
     built = true;
 
+    // Hero: the one oversized headline of the page, then the lead, then a real Curiosity image from the site.
+    const hero = el("section", "about-hero");
+    const heroText = el("div", "about-hero-text");
+    heroText.dataset.revealGroup = "";
+    heroText.append(
+      revealed(el("div", "mw-eyebrow", "About")),
+      revealed(el("h1", "about-display", "Walk the boxwork.")),
+      revealed(
+        el(
+          "p",
+          "about-lead",
+          `An offline planner for a two-person walk on Mars at the ${meta.name}. It tells the crew which science stops are worth the energy, which route to walk, when to turn back, and what to do if a solar storm starts or one of them is injured. Everything runs in the browser, with no server.`,
+        ),
+      ),
+    );
+    hero.append(heroText);
+    const heroStop = meta.waypoints.find((point) => point.pov);
+    if (heroStop?.pov) {
+      const figure = revealed(el("figure", "about-hero-media"));
+      const image = el("img");
+      image.src = state.siteUrl + heroStop.pov;
+      image.alt = `Curiosity image taken at stop ${heroStop.id}`;
+      image.loading = "lazy";
+      const credit = heroStop.povCredit ? ` Image: ${heroStop.povCredit}.` : "";
+      figure.append(image, el("figcaption", "", `${heroStop.name}, stop ${heroStop.id}.${credit}`));
+      hero.append(figure);
+    }
+
+    // How it works: one card per engine idea, text from the README.
+    const how = el("section", "about-section");
+    how.append(revealed(el("h2", "about-heading", "How it works")));
+    const cards = el("div", "about-cards");
+    cards.dataset.revealGroup = "";
+    for (const [title, text] of HOW_IT_WORKS) {
+      const card = revealed(el("article", "about-card"));
+      card.append(el("h3", "about-card-title", title), el("p", "", text));
+      cards.append(card);
+    }
+    how.append(cards);
+
+    // Green band: the site in numbers, all read from meta.json.
+    const band = el("section", "about-band");
+    const bandInner = el("div", "about-band-inner");
+    bandInner.append(revealed(el("h2", "about-band-heading", "Every number has a source, or says it is our choice.")));
+    const statuses = Object.values(meta.constants).map((entry) => entry.status);
+    const sourced = statuses.filter((status) => status === "SOURCED").length;
+    const assumed = statuses.filter((status) => status === "ASSUMPTION").length;
+    const sideKm = (Math.max(meta.width, meta.height) * meta.cellSizeMeters) / 1000;
+    const facts: [string, string][] = [
+      [`${sideKm} km`, "site width, one routing grid"],
+      [`${meta.cellSizeMeters} m`, "routing cell size"],
+      [String(meta.waypoints.length), "real Curiosity stops"],
+      [`${sourced} / ${assumed}`, "constants sourced / assumed"],
+    ];
+    const factGrid = el("div", "about-facts");
+    factGrid.dataset.revealGroup = "";
+    for (const [value, label] of facts) {
+      const fact = revealed(el("div", "about-fact"));
+      fact.append(el("div", "about-fact-value num", value), el("div", "about-fact-label", label));
+      factGrid.append(fact);
+    }
+    bandInner.append(factGrid);
+    band.append(bandInner);
+
     // Settings
     const settings = el("section", "about-section");
-    settings.append(el("h3", "", "Settings"));
-    settings.append(
+    settings.append(revealed(el("h2", "about-heading", "Settings")));
+    const settingsCard = revealed(el("div", "about-settings"));
+    settingsCard.append(
       el("p", "about-text", "These values are our choices (ASSUMPTION in docs/assumptions.md). Change one and the engine recalculates every number. Leave a box empty for the documented value."),
     );
     const table = el("div", "settings-grid");
@@ -117,56 +180,81 @@ export function createAbout(container: HTMLElement): void {
       inputs.set(setting.name, input);
       docsValues.set(setting.name, docs);
     }
-    const reset = el("button", "btn", "Reset all to the documented values");
+    const reset = el("button", "mw-btn mw-btn-link", "Reset all to the documented values");
     reset.type = "button";
     reset.addEventListener("click", () => update({ params: {} }));
-    settings.append(table, reset, settingsNote);
+    settingsCard.append(table, reset, settingsNote);
     const fixed = PIPELINE_SETTINGS.map((name) => `${name} = ${meta.constants[name]?.value ?? "?"}`).join(", ");
-    settings.append(el("p", "about-text", `Fixed in the site files (run the pipeline again to change): ${fixed}.`));
+    settingsCard.append(el("p", "about-text", `Fixed in the site files (run the pipeline again to change): ${fixed}.`));
+    settings.append(settingsCard);
 
-    // Data sources
+    // Data sources: a rule-separated list, label left, credit and link right.
     const sources = el("section", "about-section");
-    sources.append(el("h3", "", "Data sources"));
-    const sourceList = el("ul", "about-list");
+    sources.append(revealed(el("h2", "about-heading", "Data sources")));
+    const sourceList = el("ul", "about-rows");
+    sourceList.dataset.revealGroup = "";
     for (const source of meta.sources) {
-      const item = el("li");
+      const item = revealed(el("li", "about-row"));
       const link = el("a", "", source.url);
       link.href = source.url;
       link.target = "_blank";
       link.rel = "noopener";
-      item.append(el("strong", "", source.label), ` (${source.credit}). `, link);
+      const detail = el("div", "about-row-detail");
+      detail.append(el("div", "", source.credit), link);
+      item.append(el("div", "about-row-title", source.label), detail);
       sourceList.append(item);
     }
     sources.append(sourceList);
 
     // Data limits
     const limits = el("section", "about-section");
-    limits.append(el("h3", "", "Data limits"));
-    const noteList = el("ul", "about-list");
-    for (const note of meta.notes) noteList.append(el("li", "", note.text));
+    limits.append(revealed(el("h2", "about-heading", "Data limits")));
+    const noteList = el("ul", "about-rows");
+    noteList.dataset.revealGroup = "";
+    for (const note of meta.notes) noteList.append(revealed(el("li", "about-row about-row-text", note.text)));
     limits.append(noteList);
 
-    // Every assumption
+    // Every assumption: a long list, so it opens on request.
     const assumptions = el("section", "about-section");
-    assumptions.append(el("h3", "", "Assumptions (docs/assumptions.md)"));
-    const assumptionList = el("ul", "about-list");
-    for (const [name, entry] of Object.entries(meta.constants)) {
+    assumptions.append(revealed(el("h2", "about-heading", "Assumptions")));
+    const details = revealed(el("details", "about-details"));
+    details.append(el("summary", "", `Show all ${assumed} assumptions (docs/assumptions.md)`));
+    const assumptionList = el("ul", "about-rows");
+    for (const [constantName, entry] of Object.entries(meta.constants)) {
       if (entry.status !== "ASSUMPTION") continue;
-      const item = el("li");
-      item.append(el("code", "", name), ` = ${entry.value}. ${entry.source}`);
+      const item = el("li", "about-row");
+      const value = el("div", "about-row-title");
+      value.append(el("code", "", constantName), el("div", "about-row-value num", entry.value));
+      item.append(value, el("div", "about-row-detail", entry.source));
       assumptionList.append(item);
     }
-    assumptions.append(assumptionList);
+    details.append(assumptionList);
+    assumptions.append(details);
 
-    body.append(settings, sources, limits, assumptions);
+    const footer = el("footer", "about-footer");
+    footer.append(
+      el("div", "mw-eyebrow", "Credits"),
+      el(
+        "p",
+        "",
+        "HiRISE: NASA/JPL-Caltech/UArizona. DEM and orthophoto mosaics: Calef and Parker (2016), USGS Astrogeology. THEMIS: NASA/JPL-Caltech/ASU. CRISM: NASA/JHU-APL. Curiosity images and RAD: NASA/JPL-Caltech/SwRI.",
+      ),
+    );
+
+    body.append(hero, how, band, settings, sources, limits, assumptions, footer);
   };
 
   const render = (state: MissionState): void => {
-    const wasHidden = backdrop.hidden;
-    backdrop.hidden = !state.aboutOpen;
+    const wasHidden = page.hidden;
+    page.hidden = !state.aboutOpen;
+    document.body.classList.toggle("about-open", state.aboutOpen);
     if (!state.aboutOpen) return;
     if (!built) build(state);
-    if (wasHidden) close.focus();
+    if (wasHidden) {
+      page.scrollTop = 0;
+      reveal();
+      close.focus();
+    }
     for (const setting of SETTINGS) {
       const input = inputs.get(setting.name) as HTMLInputElement;
       const docs = docsValues.get(setting.name) as HTMLElement;
@@ -187,4 +275,53 @@ export function createAbout(container: HTMLElement): void {
   };
   subscribe((state) => render(state));
   render(getState());
+}
+
+// Text from the README, section "How it works".
+const HOW_IT_WORKS: [string, string][] = [
+  ["Terrain", "A 1 m HiRISE elevation model, averaged to 3 m cells. Slopes above 20 deg cannot be walked; 15 to 20 deg cost more."],
+  ["Energy", "Each step costs energy from the Santee et al. (2001) load-carriage model at Mars gravity. Uphill costs more than downhill, so the way out and the way back differ."],
+  ["Walk-back area", "From every cell, the energy and time needed to get back to the habitat. It shrinks as the walk goes on."],
+  ["Buddy rescue", "One astronaut carries the other, at most 2 km. If the habitat is out of reach, the rescuer goes to the nearest rover pickup zone."],
+  ["Radiation", "Only the habitat and the rover are full shelters. No dose rates are invented: the app quotes only the measured May 2024 total beside Curiosity."],
+  ["Science planner", "Adds the stop with the most science value per extra joule while the plan keeps the energy reserve, EVA time and walk radius."],
+];
+
+// Marks an element to fade and rise once when it scrolls into view.
+function revealed<T extends HTMLElement>(node: T): T {
+  node.classList.add("reveal");
+  return node;
+}
+
+// Scroll-into-view reveal inside the page's own scroller. Each element plays once and then stays.
+// Siblings in one [data-reveal-group] get a stagger index, capped at 5 so long lists keep up with the scroll.
+// Returns a function that starts watching the elements built so far; call it each time the page opens.
+function createReveal(scroller: HTMLElement): () => void {
+  const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const canObserve = "IntersectionObserver" in window;
+  // Fire a little before the element is fully in view, so the motion ends as the eye arrives.
+  const observer = canObserve
+    ? new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            entry.target.classList.add("is-visible");
+            observer?.unobserve(entry.target);
+          }
+        },
+        { root: scroller, threshold: 0.15, rootMargin: "0px 0px -8% 0px" },
+      )
+    : null;
+
+  return () => {
+    for (const group of scroller.querySelectorAll<HTMLElement>("[data-reveal-group]")) {
+      const items = group.querySelectorAll<HTMLElement>(".reveal");
+      items.forEach((item, index) => item.style.setProperty("--reveal-index", String(Math.min(index, 5))));
+    }
+    const waiting = scroller.querySelectorAll<HTMLElement>(".reveal:not(.is-visible)");
+    for (const node of waiting) {
+      if (reduceMotion || !observer) node.classList.add("is-visible");
+      else observer.observe(node);
+    }
+  };
 }
